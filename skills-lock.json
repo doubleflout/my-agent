@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "deeppapernote": {
+      "source": "917Dhj/DeepPaperNote",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "92de18130c039bd3adec0a16496822660d4d752594714751f4a7e87b1eb81447"
+    }
+  }
+}

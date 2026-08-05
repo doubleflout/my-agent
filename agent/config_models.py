@@ -1,0 +1,152 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from proactive_v2.config import ProactiveConfig
+
+
+@dataclass
+class TelegramChannelConfig:
+    token: str
+    allow_from: list[str] = field(default_factory=list)
+
+
+@dataclass
+class QQGroupConfig:
+    group_id: str
+    allow_from: list[str] = field(default_factory=list)
+    require_at: bool = True
+
+
+@dataclass
+class QQChannelConfig:
+    bot_uin: str
+    allow_from: list[str] = field(default_factory=list)
+    groups: list[QQGroupConfig] = field(default_factory=list)
+    websocket_open_timeout_seconds: float = 5.0
+
+
+@dataclass
+class QQBotGroupConfig:
+    group_openid: str
+    allow_from: list[str] = field(default_factory=list)
+    require_at: bool = True
+    allow_proactive: bool = False
+
+
+@dataclass
+class QQBotChannelConfig:
+    app_id: str
+    client_secret: str
+    allow_from: list[str] = field(default_factory=list)
+    groups: list[QQBotGroupConfig] = field(default_factory=list)
+
+
+@dataclass
+class ChannelsConfig:
+    telegram: TelegramChannelConfig | None = None
+    qq: QQChannelConfig | None = None
+    qqbot: QQBotChannelConfig | None = None
+    socket: str = "/tmp/akashic.sock"
+
+
+@dataclass
+class MemoryEmbeddingConfig:
+    model: str = "text-embedding-v3"
+    api_key: str = ""
+    base_url: str = ""
+
+
+@dataclass
+class MemoryConfig:
+    enabled: bool = False
+    engine: str = ""
+    embedding: MemoryEmbeddingConfig = field(default_factory=MemoryEmbeddingConfig)
+
+
+@dataclass
+class FitbitIntegrationConfig:
+    enabled: bool = False
+
+
+@dataclass
+class PeerAgentConfig:
+    name: str
+    base_url: str
+    launcher: list[str]          # 拉起命令，如 ["uv", "run", "python", "-m", "app.a2a_server"]
+    cwd: str | None = None       # 子进程工作目录，None 表示继承父进程
+    description: str = ""        # 工具描述，用于 LLM 路由；服务器在线时会被 AgentCard 覆盖
+    health_path: str = "/health"
+    startup_timeout_s: int = 30
+    shutdown_timeout_s: int = 10
+
+
+@dataclass
+class WiringConfig:
+    context: str = "default"
+    memory: str = "default"
+    toolsets: list[str] = field(
+        default_factory=lambda: [
+            "meta_common",
+            "spawn",
+            "schedule",
+            "mcp",
+        ]
+    )
+
+
+@dataclass
+class Config:
+    provider: str
+    model: str
+    api_key: str
+    system_prompt: str
+    max_tokens: int = 8192
+    max_iterations: int = 10
+    memory_window: int = 24
+    base_url: str | None = None
+    extra_body: dict = field(default_factory=dict)
+    channels: ChannelsConfig = field(default_factory=ChannelsConfig)
+    proactive: ProactiveConfig = field(default_factory=ProactiveConfig)
+    memory_optimizer_enabled: bool = True
+    memory_optimizer_interval_seconds: int = 50400
+    light_model: str = ""
+    light_api_key: str = ""
+    light_base_url: str = ""
+    agent_model: str = ""
+    agent_api_key: str = ""
+    agent_base_url: str = ""
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
+    fitbit: FitbitIntegrationConfig = field(default_factory=FitbitIntegrationConfig)
+    multimodal: bool = True
+    vl_model: str = ""
+    vl_api_key: str = ""
+    vl_base_url: str = ""
+    tool_search_enabled: bool = False
+    spawn_enabled: bool = True
+    dev_mode: bool = False
+    peer_agents: list[PeerAgentConfig] = field(default_factory=list)
+    wiring: WiringConfig = field(default_factory=WiringConfig)
+
+    @classmethod
+    def load(cls, path: str | Path = "config.toml") -> Config:
+        from importlib import import_module
+
+        return import_module("agent.config").load_config(path)
+
+
+__all__ = [
+    "ChannelsConfig",
+    "Config",
+    "FitbitIntegrationConfig",
+    "MemoryConfig",
+    "MemoryEmbeddingConfig",
+    "PeerAgentConfig",
+    "QQChannelConfig",
+    "QQBotChannelConfig",
+    "QQBotGroupConfig",
+    "QQGroupConfig",
+    "TelegramChannelConfig",
+    "WiringConfig",
+]
