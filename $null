@@ -1,0 +1,7 @@
+Exception calling "ReadAllBytes" with "1" argument(s): "Could not find file 'C:\Users\hk\AppData\Local\Temp\tmp.gz'."
+At line:1 char:14
++ ... input | % { [System.IO.Compression.GzipStream]::new((New-Object Syste ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:) [], MethodInvocationException
+    + FullyQualifiedErrorId : FileNotFoundException
+ 
