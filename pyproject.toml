@@ -1,0 +1,18 @@
+[project]
+name = "akashic-agent"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py314"]
+include = '\.pyi?$'
+
+[dependency-groups]
+dev = [
+    "rich>=15.0.0",
+]
+
