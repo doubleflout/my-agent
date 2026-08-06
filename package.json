@@ -3,11 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm run build:dashboard && npm run build:plugins",
+    "build": "npm run build:dashboard && npm run build:web && npm run build:plugins",
     "build:dashboard": "node frontend/dashboard/build.mjs",
+    "build:web": "node frontend/web/build.mjs",
     "build:plugins": "node scripts/build-plugins.mjs",
     "build:watch": "node scripts/build-plugins.mjs --watch",
-    "lint": "eslint \"frontend/dashboard/src/**/*.{ts,tsx}\" \"plugins/**/*.ts\" \"types/**/*.d.ts\"",
+    "lint": "eslint \"frontend/dashboard/src/**/*.{ts,tsx}\" \"frontend/web/src/**/*.ts\" \"plugins/**/*.ts\" \"types/**/*.d.ts\"",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
@@ -23,7 +24,10 @@
     "typescript-eslint": "^8.59.1"
   },
   "dependencies": {
+    "@ant-design/icons-vue": "^7.0.1",
+    "ant-design-vue": "^4.2.6",
     "react": "^19.2.5",
-    "react-dom": "^19.2.5"
+    "react-dom": "^19.2.5",
+    "vue": "^3.5.0"
   }
 }

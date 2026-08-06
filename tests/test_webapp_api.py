@@ -1,0 +1,196 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import httpx
+
+from webapp.agent_executor import web_session_key
+from webapp.app import create_web_app
+from webapp.store import WebStore
+
+
+class FakeExecutor:
+    def __init__(self, *, fail: bool = False, delay: float = 0.0) -> None:
+        self.fail = fail
+        self.delay = delay
+        self.calls: list[dict[str, str]] = []
+
+    async def run(self, *, content: str, user_id: str, conversation_id: str) -> str:
+        self.calls.append(
+            {
+                "content": content,
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+            }
+        )
+        if self.delay:
+            await asyncio.sleep(self.delay)
+        if self.fail:
+            raise RuntimeError("agent failed")
+        return f"echo: {content}"
+
+
+def make_app(tmp_path: Path, executor: FakeExecutor | None = None):
+    store = WebStore("sqlite:///" + (tmp_path / "web.db").as_posix())
+    return create_web_app(
+        workspace=tmp_path,
+        store=store,
+        agent_executor=executor or FakeExecutor(),
+        jwt_secret="test-secret",
+    )
+
+
+async def register(client: httpx.AsyncClient, email: str) -> str:
+    res = await client.post(
+        "/api/auth/register",
+        json={"email": email, "password": "password123", "display_name": "Tester"},
+    )
+    assert res.status_code == 200, res.text
+    return res.json()["access_token"]
+
+
+async def create_conversation(client: httpx.AsyncClient, token: str) -> str:
+    res = await client.post(
+        "/api/conversations",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"title": "Daily"},
+    )
+    assert res.status_code == 200, res.text
+    return res.json()["id"]
+
+
+async def test_register_login_and_me(tmp_path):
+    app = make_app(tmp_path)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        token = await register(client, "User@Example.com")
+        me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200
+        assert me.json()["email"] == "user@example.com"
+
+        duplicate = await client.post(
+            "/api/auth/register",
+            json={"email": "user@example.com", "password": "password123"},
+        )
+        assert duplicate.status_code == 409
+
+        bad_login = await client.post(
+            "/api/auth/login",
+            json={"email": "user@example.com", "password": "wrong"},
+        )
+        assert bad_login.status_code == 401
+
+        login = await client.post(
+            "/api/auth/login",
+            json={"email": "user@example.com", "password": "password123"},
+        )
+        assert login.status_code == 200
+
+
+async def test_conversation_isolation_and_session_key(tmp_path):
+    executor = FakeExecutor()
+    app = make_app(tmp_path, executor)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        token_a = await register(client, "a@example.com")
+        token_b = await register(client, "b@example.com")
+        conv_a = await create_conversation(client, token_a)
+
+        forbidden = await client.get(
+            f"/api/conversations/{conv_a}/messages",
+            headers={"Authorization": f"Bearer {token_b}"},
+        )
+        assert forbidden.status_code == 404
+
+        post = await client.post(
+            f"/api/conversations/{conv_a}/messages",
+            headers={"Authorization": f"Bearer {token_a}"},
+            json={"content": "hello"},
+        )
+        assert post.status_code == 200, post.text
+        body = post.json()
+        user_id = executor.calls[0]["user_id"]
+        assert body["session_key"] == web_session_key(user_id, conv_a)
+
+
+async def test_turn_stream_done_and_persists_assistant_message(tmp_path):
+    app = make_app(tmp_path)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        timeout=5.0,
+    ) as client:
+        token = await register(client, "stream@example.com")
+        conv = await create_conversation(client, token)
+        post = await client.post(
+            f"/api/conversations/{conv}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"content": "hello stream"},
+        )
+        turn_id = post.json()["turn_id"]
+        stream = await client.get(
+            f"/api/turns/{turn_id}/stream",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert stream.status_code == 200
+        assert "event: content_delta" in stream.text
+        assert "event: done" in stream.text
+
+        messages = await client.get(
+            f"/api/conversations/{conv}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        roles = [item["role"] for item in messages.json()]
+        assert roles == ["user", "assistant"]
+
+
+async def test_agent_failure_streams_error(tmp_path):
+    app = make_app(tmp_path, FakeExecutor(fail=True))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        timeout=5.0,
+    ) as client:
+        token = await register(client, "fail@example.com")
+        conv = await create_conversation(client, token)
+        post = await client.post(
+            f"/api/conversations/{conv}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"content": "break"},
+        )
+        turn_id = post.json()["turn_id"]
+        stream = await client.get(
+            f"/api/turns/{turn_id}/stream",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert stream.status_code == 200
+        assert "event: error" in stream.text
+        assert "agent failed" in stream.text
+
+
+async def test_rate_limit_returns_429(tmp_path):
+    app = make_app(tmp_path, FakeExecutor(delay=0.1))
+    app.state.rate_limiter.max_per_minute = 1
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        token = await register(client, "limit@example.com")
+        conv = await create_conversation(client, token)
+        first = await client.post(
+            f"/api/conversations/{conv}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"content": "one"},
+        )
+        assert first.status_code == 200
+        second = await client.post(
+            f"/api/conversations/{conv}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"content": "two"},
+        )
+        assert second.status_code == 429
