@@ -321,7 +321,7 @@ const App = defineComponent({
         h("div", { class: "sidebar-head" }, [
           h("div", { class: "product" }, [
             h("span", { class: "brand-mark small" }, "A"),
-            h("div", [h("strong", "Akashic"), h("span", "Web Chat")]),
+            h("div", [h("strong", "Akashic"), h("span", user.value?.email || "Web Chat")]),
           ]),
           h(Button, {
             type: "text",
@@ -334,6 +334,7 @@ const App = defineComponent({
           block: true,
           onClick: () => void createConversation(),
         }, () => [h(PlusOutlined), "新建会话"]),
+        h("div", { class: "sidebar-label" }, "所有对话"),
         h(Divider),
         conversationLoading.value
           ? h("div", { class: "sidebar-loading" }, [h(Spin), h("span", "加载会话")])
@@ -348,8 +349,8 @@ const App = defineComponent({
                     class: ["conversation-item", item.id === activeId.value ? "active" : ""],
                     onClick: () => (activeId.value = item.id),
                   }, [
-                    h(MessageOutlined),
-                    h("span", item.title),
+                    h("span", { class: "conversation-icon" }, [h(MessageOutlined)]),
+                    h("span", { class: "conversation-title" }, item.title),
                   ]),
                 ),
             }),
@@ -394,7 +395,7 @@ const App = defineComponent({
             h("div", [
               h(Typography.Title, { level: 3 }, () => activeConversation.value?.title || "选择会话"),
               h(Typography.Text, { type: "secondary" }, () =>
-                user.value?.display_name || user.value?.email || "",
+                activeId.value ? "当前对话" : "从左侧选择一个对话",
               ),
             ]),
             busy.value ? h(Spin, { size: "small" }) : null,
