@@ -298,12 +298,12 @@ class Session:
 class SessionManager:
     _METADATA_REFRESH_EVERY: int = 10
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, store: Any | None = None):
         self.workspace = workspace
         self.session_dir = workspace / "sessions"
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = workspace / "sessions.db"
-        self._store = SessionStore(self.db_path)
+        self._store = store or SessionStore(self.db_path)
         self._cache: dict[str, Session] = {}
         self._write_locks: dict[str, asyncio.Lock] = {}
 

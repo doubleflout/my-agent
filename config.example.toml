@@ -107,6 +107,24 @@ api_key = "sk-..."
 base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 # =============================================================================
+# 存储后端
+# sqlite：保持原 workspace SQLite 文件。
+# postgres：使用 PostgreSQL 存储非向量状态表；memory2/vec_items 仍保留 SQLite。
+# =============================================================================
+
+[storage]
+backend = "sqlite"
+
+[storage.postgres]
+host = "localhost"
+port = 5432
+database = "akashic_agent"
+user = "postgres"
+password = "${AKASHIC_POSTGRES_PASSWORD}"
+# 也可以直接提供完整连接串，优先级高于上面的 host/port/database/user/password。
+# database_url = "postgresql+psycopg://postgres:${AKASHIC_POSTGRES_PASSWORD}@localhost:5432/akashic_agent"
+
+# =============================================================================
 # 主动推送（可选）
 # 先跑通基本对话再开启这部分。
 # =============================================================================

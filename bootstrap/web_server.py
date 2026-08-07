@@ -7,10 +7,9 @@ from pathlib import Path
 import uvicorn
 
 from agent.config_models import Config
-from bootstrap.tools import build_core_runtime
 from core.net.http import SharedHttpResources
-from webapp.agent_executor import AgentLoopExecutor
 from webapp.app import create_web_app
+from webapp.runtime_manager import UserRuntimeAgentExecutor, UserRuntimeManager
 
 
 async def run_web_chat_server(
@@ -21,20 +20,19 @@ async def run_web_chat_server(
     port: int = 2240,
 ) -> None:
     http_resources = SharedHttpResources()
-    core = build_core_runtime(config, workspace, http_resources)
-    await core.start()
+    runtime_manager = UserRuntimeManager(
+        config=config,
+        base_workspace=workspace,
+        http_resources=http_resources,
+    )
     app = create_web_app(
         workspace=workspace,
-        agent_executor=AgentLoopExecutor(core.loop),
+        agent_executor=UserRuntimeAgentExecutor(runtime_manager),
     )
-    scheduler_task = asyncio.create_task(core.scheduler.run(), name="web_scheduler")
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info"))
     try:
         await server.serve()
     finally:
-        core.scheduler.stop()
-        scheduler_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
-            await scheduler_task
-        await core.stop()
+            await runtime_manager.aclose()
         await http_resources.aclose()

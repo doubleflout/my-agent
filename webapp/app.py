@@ -21,6 +21,7 @@ from webapp.schemas import (
     TokenResponse,
     UserResponse,
 )
+from bootstrap.init_workspace import init_user_workspace
 from webapp.security import (
     TokenError,
     create_access_token,
@@ -105,6 +106,7 @@ def create_web_app(
                 password_hash=hash_password(payload.password),
                 display_name=payload.display_name,
             )
+            init_user_workspace(workspace / "users" / user.id)
         except DuplicateEmailError as exc:
             raise HTTPException(status_code=409, detail="email already registered") from exc
         return TokenResponse(access_token=create_access_token(user_id=user.id, secret=secret))

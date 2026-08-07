@@ -179,6 +179,31 @@ def _ensure_workspace_db_assets(
         summary.notes.append("memory.enabled = false，未预创建语义记忆库。")
 
 
+def init_user_workspace(
+    workspace: Path,
+    *,
+    config: Config | None = None,
+) -> InitSummary:
+    """Initialize a per-user workspace without creating runtime services."""
+    summary = InitSummary()
+    workspace.mkdir(parents=True, exist_ok=True)
+    _ensure_workspace_text_assets(workspace, force=False, summary=summary)
+    _ensure_workspace_json_assets(workspace, force=False, summary=summary)
+    _ensure_workspace_directories(workspace, summary=summary)
+
+    if config is not None and config.memory.enabled:
+        storage_results = ensure_memory_plugin_storage(config, workspace)
+        if storage_results:
+            for path, existed in storage_results:
+                if existed:
+                    summary.skipped.append(path)
+                else:
+                    summary.created.append(path)
+
+    summary.notes.append(f"用户工作区已初始化: {workspace}")
+    return summary
+
+
 def init_workspace(
     *,
     config_path: str | Path = "config.toml",

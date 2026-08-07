@@ -66,6 +66,22 @@ class MemoryConfig:
 
 
 @dataclass
+class PostgresStorageConfig:
+    database_url: str = ""
+    host: str = "localhost"
+    port: int = 5432
+    database: str = "akashic_agent"
+    user: str = "postgres"
+    password: str = ""
+
+
+@dataclass
+class StorageConfig:
+    backend: str = "sqlite"
+    postgres: PostgresStorageConfig = field(default_factory=PostgresStorageConfig)
+
+
+@dataclass
 class FitbitIntegrationConfig:
     enabled: bool = False
 
@@ -118,6 +134,7 @@ class Config:
     agent_api_key: str = ""
     agent_base_url: str = ""
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
     fitbit: FitbitIntegrationConfig = field(default_factory=FitbitIntegrationConfig)
     multimodal: bool = True
     vl_model: str = ""
@@ -142,11 +159,13 @@ __all__ = [
     "FitbitIntegrationConfig",
     "MemoryConfig",
     "MemoryEmbeddingConfig",
+    "PostgresStorageConfig",
     "PeerAgentConfig",
     "QQChannelConfig",
     "QQBotChannelConfig",
     "QQBotGroupConfig",
     "QQGroupConfig",
     "TelegramChannelConfig",
+    "StorageConfig",
     "WiringConfig",
 ]
