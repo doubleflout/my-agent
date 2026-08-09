@@ -62,7 +62,7 @@ def make_config() -> Config:
 def test_workspace_resolver_uses_users_root_for_default_workspace(tmp_path):
     resolver = UserWorkspaceResolver(tmp_path / "workspace")
     workspace = resolver.for_user("user-1")
-    assert workspace == tmp_path / "users" / "user-1"
+    assert workspace == tmp_path / "workspace" / "users" / "user-1"
     assert workspace.exists()
 
 
@@ -118,7 +118,7 @@ def test_user_runtime_agent_executor_uses_web_session_key(tmp_path):
         assert result == "ok"
         assert built[0].loop.calls[0]["session_key"] == "web:u1:c1"
         assert built[0].loop.calls[0]["channel"] == "web"
-        assert built[0].workspace == tmp_path / "users" / "u1"
+        assert built[0].workspace == tmp_path / "workspace" / "users" / "u1"
         await manager.aclose()
 
     asyncio.run(scenario())

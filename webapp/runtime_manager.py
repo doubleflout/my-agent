@@ -11,6 +11,15 @@ from agent.config_models import Config
 from bootstrap.tools import CoreRuntime, build_core_runtime
 from core.net.http import SharedHttpResources
 from webapp.agent_executor import AgentExecutor, web_session_key
+from webapp.proactive_scheduler import WebProactiveJob
+
+
+_PROACTIVE_TICK_PROMPT = """[proactive tick]
+你正在为当前用户的默认主动会话生成一条主动消息。
+请结合长期记忆、最近上下文和主动消息规则判断现在是否应该发起对话。
+如果现在不适合主动打扰，或者没有足够自然的话题，只返回 NO_PROACTIVE_CONTENT。
+如果适合，只返回一条会直接展示给用户的中文消息，不要解释决策过程。
+"""
 
 
 class UserWorkspaceResolver:
@@ -18,8 +27,7 @@ class UserWorkspaceResolver:
 
     def __init__(self, base_workspace: Path) -> None:
         self.base_workspace = base_workspace
-        root = base_workspace.parent if base_workspace.name == "workspace" else base_workspace
-        self.users_root = root / "users"
+        self.users_root = base_workspace / "users"
 
     def for_user(self, user_id: str) -> Path:
         clean = str(user_id).strip()
@@ -118,12 +126,32 @@ class UserRuntimeAgentExecutor(AgentExecutor):
         content: str,
         user_id: str,
         conversation_id: str,
+        session_key: str | None = None,
     ) -> str:
         runtime = await self.runtime_manager.get_runtime(user_id)
         return await runtime.loop.process_direct(
             content=content,
-            session_key=web_session_key(user_id, conversation_id),
+            session_key=session_key or web_session_key(user_id, conversation_id),
             channel="web",
             chat_id=conversation_id,
             stream_events=False,
         )
+
+
+class UserRuntimeProactiveRunner:
+    def __init__(self, runtime_manager: UserRuntimeManager) -> None:
+        self.runtime_manager = runtime_manager
+
+    async def run(self, job: WebProactiveJob) -> str | None:
+        runtime = await self.runtime_manager.get_runtime(job.user_id)
+        response = await runtime.loop.process_direct(
+            content=_PROACTIVE_TICK_PROMPT,
+            session_key=job.session_key,
+            channel="web_proactive",
+            chat_id=job.conversation_id,
+            stream_events=False,
+        )
+        text = str(response or "").strip()
+        if not text or text == "NO_PROACTIVE_CONTENT":
+            return None
+        return text

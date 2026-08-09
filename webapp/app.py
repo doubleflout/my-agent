@@ -8,7 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from webapp.agent_executor import AgentExecutor, AgentLoopExecutor, web_session_key
+from agent.config_models import Config
+from webapp.agent_executor import AgentExecutor, AgentLoopExecutor
+from webapp.proactive_scheduler import WebProactiveRunner, WebProactiveScheduler
 from webapp.rate_limit import InMemoryRateLimiter, RateLimitExceeded, RateLimiter, RedisRateLimiter
 from webapp.schemas import (
     ConversationResponse,
@@ -30,6 +32,7 @@ from webapp.security import (
     verify_password,
 )
 from webapp.sse import TurnStreamBroker
+from webapp.runtime_manager import UserWorkspaceResolver
 from webapp.store import DuplicateEmailError, UserRecord, WebStore, default_database_url
 
 
@@ -45,11 +48,17 @@ def create_web_app(
     *,
     workspace: Path,
     agent_executor: AgentExecutor | None = None,
+    proactive_runner: WebProactiveRunner | None = None,
     agent_loop=None,
     store: WebStore | None = None,
     jwt_secret: str | None = None,
 ) -> FastAPI:
     workspace.mkdir(parents=True, exist_ok=True)
+    workspace_resolver = UserWorkspaceResolver(workspace)
+    try:
+        app_config = Config.load("config.toml")
+    except Exception:
+        app_config = None
     web_store = store or WebStore(_database_url_from_env(workspace))
     executor = agent_executor or AgentLoopExecutor(agent_loop)
     broker = TurnStreamBroker()
@@ -61,6 +70,34 @@ def create_web_app(
     app.state.agent_executor = executor
     app.state.turn_stream_broker = broker
     app.state.rate_limiter = limiter
+    app.state.web_proactive_scheduler = None
+    app.state.web_proactive_task = None
+
+    if app_config is not None and proactive_runner is not None and app_config.proactive.enabled:
+        proactive_scheduler = WebProactiveScheduler(
+            store=web_store,
+            config=app_config,
+            runner=proactive_runner,
+        )
+        app.state.web_proactive_scheduler = proactive_scheduler
+
+        @app.on_event("startup")
+        async def start_web_proactive_scheduler() -> None:
+            app.state.web_proactive_task = asyncio.create_task(
+                proactive_scheduler.run(),
+                name="web_proactive_scheduler",
+            )
+
+        @app.on_event("shutdown")
+        async def stop_web_proactive_scheduler() -> None:
+            proactive_scheduler.stop()
+            task = app.state.web_proactive_task
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
     origins = [
         origin.strip()
@@ -106,7 +143,11 @@ def create_web_app(
                 password_hash=hash_password(payload.password),
                 display_name=payload.display_name,
             )
-            init_user_workspace(workspace / "users" / user.id)
+            init_user_workspace(
+                workspace_resolver.for_user(user.id),
+                config=app_config,
+            )
+            web_store.ensure_default_proactive_session(user_id=user.id)
         except DuplicateEmailError as exc:
             raise HTTPException(status_code=409, detail="email already registered") from exc
         return TokenResponse(access_token=create_access_token(user_id=user.id, secret=secret))
@@ -176,6 +217,7 @@ def create_web_app(
         turn_id: str,
         user_id: str,
         conversation_id: str,
+        session_key: str,
         content: str,
     ) -> None:
         try:
@@ -184,6 +226,7 @@ def create_web_app(
                 content=content,
                 user_id=user_id,
                 conversation_id=conversation_id,
+                session_key=session_key,
             )
             web_store.add_message(
                 conversation_id=conversation_id,
@@ -210,7 +253,8 @@ def create_web_app(
         payload: CreateMessageRequest,
         user: UserRecord = Depends(get_current_user),
     ) -> CreateMessageResponse:
-        if web_store.get_conversation(user_id=user.id, conversation_id=conversation_id) is None:
+        conv = web_store.get_conversation(user_id=user.id, conversation_id=conversation_id)
+        if conv is None:
             raise HTTPException(status_code=404, detail="conversation not found")
         acquired = False
         try:
@@ -233,6 +277,7 @@ def create_web_app(
                     turn_id=turn.id,
                     user_id=user.id,
                     conversation_id=conversation_id,
+                    session_key=conv.session_key,
                     content=payload.content,
                 ),
                 name=f"web_turn:{turn.id}",
@@ -251,7 +296,7 @@ def create_web_app(
                 created_at=message.created_at,
             ),
             turn_id=turn.id,
-            session_key=web_session_key(user.id, conversation_id),
+            session_key=conv.session_key,
         )
 
     @app.get("/api/turns/{turn_id}/stream")

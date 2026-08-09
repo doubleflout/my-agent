@@ -497,6 +497,7 @@ def build_core_runtime(
     from agent.plugins.manager import PluginManager as _PluginManager
     plugin_manager = _PluginManager(
         plugin_dirs=_resolve_plugin_dirs(workspace),
+        app_config=config,
         event_bus=event_bus,
         tool_registry=tools,
         workspace=workspace,

@@ -11,7 +11,7 @@ from agent.tools.message_push import MessagePushTool
 from proactive_v2.loop import ProactiveLoop
 from proactive_v2.memory_optimizer import MemoryOptimizer, MemoryOptimizerLoop
 from proactive_v2.presence import PresenceStore
-from proactive_v2.state import ProactiveStateStore
+from proactive_v2.state import build_proactive_state_store
 from session.manager import SessionManager
 
 if TYPE_CHECKING:
@@ -58,7 +58,13 @@ def build_proactive_runtime(
         return tasks, None
 
     # 2. 先准备 proactive 独立状态存储和配置快照。
-    proactive_state = ProactiveStateStore(workspace / "proactive.db")
+    storage = getattr(config, "storage", None)
+    postgres = getattr(storage, "postgres", None)
+    proactive_state = build_proactive_state_store(
+        backend=str(getattr(storage, "backend", "sqlite") or "sqlite"),
+        workspace_dir=workspace,
+        database_url=str(getattr(postgres, "database_url", "") or ""),
+    )
     proactive_cfg = config.proactive
     proactive_provider = _build_proactive_provider(config, provider)
 

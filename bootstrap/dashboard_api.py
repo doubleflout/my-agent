@@ -22,11 +22,14 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from agent.config_models import Config
 from agent.memory import MemoryStore
 from proactive_v2.memory_optimizer import MemoryOptimizerBusy
-from proactive_v2.state import ProactiveStateStore
+from proactive_v2.postgres_dashboard import PostgresProactiveDashboardReader
+from proactive_v2.state import build_proactive_state_store
 from core.common.timekit import utcnow
 from core.memory.engine import MemoryAdminApi
+from session.postgres_store import PostgresSessionStore
 from session.store import SessionStore
 
 logger = logging.getLogger(__name__)
@@ -663,7 +666,16 @@ def create_dashboard_app(
     memory_store: MemoryStore | None = None,
 ) -> FastAPI:
     workspace.mkdir(parents=True, exist_ok=True)
-    store = SessionStore(workspace / "sessions.db")
+    app_config = Config.load("config.toml")
+    storage = getattr(app_config, "storage", None)
+    storage_backend = str(getattr(storage, "backend", "sqlite") or "sqlite").lower()
+    postgres = getattr(storage, "postgres", None)
+    database_url = str(getattr(postgres, "database_url", "") or "").strip()
+    store = (
+        PostgresSessionStore(database_url)
+        if storage_backend == "postgres"
+        else SessionStore(workspace / "sessions.db")
+    )
     proactive_reader: ProactiveDashboardReader | None = None
     optimizer_task: asyncio.Task[None] | None = None
     optimizer_last_status = "idle"
@@ -675,8 +687,23 @@ def create_dashboard_app(
     def get_proactive_reader() -> ProactiveDashboardReader:
         nonlocal proactive_reader
         if proactive_reader is None:
-            ProactiveStateStore(workspace / "proactive.db").close()
-            proactive_reader = ProactiveDashboardReader(workspace / "proactive.db")
+            if storage_backend == "postgres":
+                if not database_url:
+                    raise RuntimeError(
+                        "storage.backend=postgres but storage.postgres.database_url is empty"
+                    )
+                build_proactive_state_store(
+                    backend=storage_backend,
+                    workspace_dir=workspace,
+                    database_url=database_url,
+                ).close()
+                proactive_reader = PostgresProactiveDashboardReader(database_url)
+            else:
+                build_proactive_state_store(
+                    backend=storage_backend,
+                    workspace_dir=workspace,
+                ).close()
+                proactive_reader = ProactiveDashboardReader(workspace / "proactive.db")
         return proactive_reader
 
     @asynccontextmanager

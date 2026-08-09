@@ -4,7 +4,7 @@ import json
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -13,15 +13,21 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Integer,
+    JSON,
     MetaData,
     String,
     Table,
     Text,
     create_engine,
+    inspect,
     select,
+    text,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
+
+from proactive_v2.user_tick import compute_user_tick_interval
 
 
 def utcnow() -> datetime:
@@ -42,6 +48,7 @@ class UserRecord:
 class ConversationRecord:
     id: str
     user_id: str
+    session_key: str
     title: str
     created_at: datetime
     updated_at: datetime
@@ -64,10 +71,25 @@ class TurnRecord:
     id: str
     conversation_id: str
     user_id: str
+    session_key: str
     status: str
     error: str | None
     created_at: datetime
     completed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class ProactiveSessionRecord:
+    id: str
+    user_id: str
+    conversation_id: str
+    session_key: str
+    enabled: bool
+    last_tick_at: datetime | None
+    next_tick_at: datetime
+    interval_seconds: int
+    created_at: datetime
+    updated_at: datetime
 
 
 class DuplicateEmailError(ValueError):
@@ -92,10 +114,27 @@ conversations = Table(
     metadata,
     Column("id", String(36), primary_key=True),
     Column("user_id", String(36), ForeignKey("users.id"), nullable=False, index=True),
+    Column("session_key", Text, nullable=False, unique=True),
     Column("title", String(200), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("archived", Boolean, nullable=False, default=False),
+)
+
+sessions = Table(
+    "sessions",
+    metadata,
+    Column("key", Text, primary_key=True),
+    Column("user_id", String(36), ForeignKey("users.id")),
+    Column("channel", Text, nullable=False),
+    Column("chat_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("last_consolidated", Integer, nullable=False, default=0),
+    Column("metadata", JSON, nullable=False, default=dict),
+    Column("last_user_at", DateTime(timezone=True)),
+    Column("last_proactive_at", DateTime(timezone=True)),
+    Column("next_seq", Integer, nullable=False, default=0),
 )
 
 chat_messages = Table(
@@ -116,11 +155,35 @@ agent_turns = Table(
     Column("id", String(36), primary_key=True),
     Column("conversation_id", String(36), ForeignKey("conversations.id"), nullable=False, index=True),
     Column("user_id", String(36), ForeignKey("users.id"), nullable=False, index=True),
+    Column("session_key", Text, ForeignKey("sessions.key"), nullable=False),
     Column("status", String(32), nullable=False),
     Column("error", Text),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("completed_at", DateTime(timezone=True)),
 )
+
+proactive_sessions = Table(
+    "proactive_sessions",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("user_id", String(36), nullable=False, index=True),
+    Column("conversation_id", String(36), nullable=False, unique=True),
+    Column("session_key", Text, nullable=False, unique=True),
+    Column("enabled", Boolean, nullable=False, default=True),
+    Column("last_tick_at", DateTime(timezone=True)),
+    Column("next_tick_at", DateTime(timezone=True), nullable=False),
+    Column("interval_seconds", Integer, nullable=False, default=4800),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+
+def _web_session_key(user_id: str, conversation_id: str) -> str:
+    return f"web:{user_id}:{conversation_id}"
+
+
+def _web_proactive_session_key(user_id: str, conversation_id: str) -> str:
+    return f"web:proactive:{user_id}:{conversation_id}"
 
 
 def default_database_url(workspace: Path) -> str:
@@ -135,9 +198,60 @@ class WebStore:
             connect_args["check_same_thread"] = False
         self.engine: Engine = create_engine(database_url, future=True, connect_args=connect_args)
         metadata.create_all(self.engine)
+        self._ensure_schema_compat()
 
     def close(self) -> None:
         self.engine.dispose()
+
+    def _ensure_schema_compat(self) -> None:
+        inspector = inspect(self.engine)
+        table_names = set(inspector.get_table_names())
+        dialect = self.engine.dialect.name
+        with self._begin() as conn:
+            if "conversations" in table_names:
+                columns = {col["name"] for col in inspector.get_columns("conversations")}
+                if "session_key" not in columns:
+                    conn.execute(text("ALTER TABLE conversations ADD COLUMN session_key TEXT"))
+                conn.execute(
+                    text(
+                        """
+                        UPDATE conversations
+                        SET session_key = 'web:' || user_id || ':' || id
+                        WHERE session_key IS NULL OR session_key = ''
+                        """
+                    )
+                )
+                if dialect == "sqlite":
+                    conn.execute(
+                        text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS ux_conversations_session_key "
+                            "ON conversations(session_key)"
+                        )
+                    )
+                elif dialect == "postgresql":
+                    conn.execute(
+                        text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS ux_conversations_session_key "
+                            "ON conversations(session_key)"
+                        )
+                    )
+            if "agent_turns" in table_names:
+                columns = {col["name"] for col in inspector.get_columns("agent_turns")}
+                if "session_key" not in columns:
+                    conn.execute(text("ALTER TABLE agent_turns ADD COLUMN session_key TEXT"))
+                conn.execute(
+                    text(
+                        """
+                        UPDATE agent_turns
+                        SET session_key = (
+                            SELECT conversations.session_key
+                            FROM conversations
+                            WHERE conversations.id = agent_turns.conversation_id
+                        )
+                        WHERE session_key IS NULL OR session_key = ''
+                        """
+                    )
+                )
 
     @contextmanager
     def _begin(self) -> Iterator[Any]:
@@ -179,18 +293,163 @@ class WebStore:
         cid = str(uuid.uuid4())
         now = utcnow()
         clean_title = (title or "New chat").strip()[:200] or "New chat"
+        session_key = _web_session_key(user_id, cid)
         with self._begin() as conn:
+            self._ensure_session_row(
+                conn,
+                user_id=user_id,
+                conversation_id=cid,
+                session_key=session_key,
+                channel="web",
+                now=now,
+            )
             conn.execute(
                 conversations.insert().values(
                     id=cid,
                     user_id=user_id,
+                    session_key=session_key,
                     title=clean_title,
                     created_at=now,
                     updated_at=now,
                     archived=False,
                 )
             )
-        return ConversationRecord(cid, user_id, clean_title, now, now, False)
+        return ConversationRecord(cid, user_id, session_key, clean_title, now, now, False)
+
+    def ensure_default_proactive_session(
+        self,
+        *,
+        user_id: str,
+        title: str = "Proactive",
+        interval_seconds: int = 4800,
+    ) -> ConversationRecord:
+        now = utcnow()
+        clean_title = title.strip()[:200] or "Proactive"
+        with self._begin() as conn:
+            existing = conn.execute(
+                select(conversations)
+                .select_from(
+                    conversations.join(
+                        proactive_sessions,
+                        conversations.c.id == proactive_sessions.c.conversation_id,
+                    )
+                )
+                .where(
+                    proactive_sessions.c.user_id == user_id,
+                    proactive_sessions.c.enabled == True,  # noqa: E712
+                    conversations.c.archived == False,  # noqa: E712
+                )
+                .order_by(proactive_sessions.c.created_at.asc())
+                .limit(1)
+            ).mappings().first()
+            if existing is not None:
+                return self._conversation_from_row(existing)
+
+            cid = str(uuid.uuid4())
+            proactive_id = str(uuid.uuid4())
+            session_key = _web_proactive_session_key(user_id, cid)
+            self._ensure_session_row(
+                conn,
+                user_id=user_id,
+                conversation_id=cid,
+                session_key=session_key,
+                channel="web_proactive",
+                now=now,
+            )
+            conn.execute(
+                conversations.insert().values(
+                    id=cid,
+                    user_id=user_id,
+                    session_key=session_key,
+                    title=clean_title,
+                    created_at=now,
+                    updated_at=now,
+                    archived=False,
+                )
+            )
+            conn.execute(
+                proactive_sessions.insert().values(
+                    id=proactive_id,
+                    user_id=user_id,
+                    conversation_id=cid,
+                    session_key=session_key,
+                    enabled=True,
+                    last_tick_at=None,
+                    next_tick_at=now,
+                    interval_seconds=max(1, int(interval_seconds)),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        return ConversationRecord(cid, user_id, session_key, clean_title, now, now, False)
+
+    def list_due_proactive_sessions(
+        self,
+        *,
+        now: datetime | None = None,
+        limit: int = 50,
+    ) -> list[ProactiveSessionRecord]:
+        tick_now = now or utcnow()
+        safe_limit = max(1, min(int(limit), 500))
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                select(proactive_sessions)
+                .where(
+                    proactive_sessions.c.enabled == True,  # noqa: E712
+                    proactive_sessions.c.next_tick_at <= tick_now,
+                )
+                .order_by(proactive_sessions.c.next_tick_at.asc())
+                .limit(safe_limit)
+            ).mappings().all()
+        return [self._proactive_session_from_row(row) for row in rows]
+
+    def user_last_user_times(self, *, user_id: str) -> list[datetime | None]:
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                select(sessions.c.last_user_at).where(sessions.c.user_id == user_id)
+            ).all()
+        return [row[0] for row in rows]
+
+    def schedule_next_proactive_tick(
+        self,
+        *,
+        session_key: str,
+        cfg: Any,
+        now: datetime | None = None,
+    ) -> int:
+        tick_now = now or utcnow()
+        with self._begin() as conn:
+            row = conn.execute(
+                select(proactive_sessions.c.user_id).where(
+                    proactive_sessions.c.session_key == session_key,
+                    proactive_sessions.c.enabled == True,  # noqa: E712
+                )
+            ).mappings().first()
+            if row is None:
+                raise KeyError(session_key)
+            user_id = str(row["user_id"])
+            user_times = [
+                item[0]
+                for item in conn.execute(
+                    select(sessions.c.last_user_at).where(sessions.c.user_id == user_id)
+                ).all()
+            ]
+            interval = compute_user_tick_interval(
+                cfg=cfg,
+                user_last_user_at=user_times,
+                now=tick_now,
+            )
+            conn.execute(
+                proactive_sessions.update()
+                .where(proactive_sessions.c.session_key == session_key)
+                .values(
+                    last_tick_at=tick_now,
+                    next_tick_at=tick_now + timedelta(seconds=interval),
+                    interval_seconds=interval,
+                    updated_at=tick_now,
+                )
+            )
+        return interval
 
     def list_conversations(self, *, user_id: str) -> list[ConversationRecord]:
         with self.engine.connect() as conn:
@@ -259,18 +518,59 @@ class WebStore:
         tid = str(uuid.uuid4())
         now = utcnow()
         with self._begin() as conn:
+            conv = conn.execute(
+                select(conversations.c.session_key).where(
+                    conversations.c.id == conversation_id,
+                    conversations.c.user_id == user_id,
+                )
+            ).mappings().first()
+            if conv is None:
+                raise KeyError(conversation_id)
+            session_key = str(conv["session_key"])
             conn.execute(
                 agent_turns.insert().values(
                     id=tid,
                     conversation_id=conversation_id,
                     user_id=user_id,
+                    session_key=session_key,
                     status="pending",
                     error=None,
                     created_at=now,
                     completed_at=None,
                 )
             )
-        return TurnRecord(tid, conversation_id, user_id, "pending", None, now, None)
+        return TurnRecord(tid, conversation_id, user_id, session_key, "pending", None, now, None)
+
+    @staticmethod
+    def _ensure_session_row(
+        conn: Any,
+        *,
+        user_id: str,
+        conversation_id: str,
+        session_key: str,
+        channel: str,
+        now: datetime,
+    ) -> None:
+        existing = conn.execute(
+            select(sessions.c.key).where(sessions.c.key == session_key).limit(1)
+        ).first()
+        if existing is not None:
+            return
+        conn.execute(
+            sessions.insert().values(
+                key=session_key,
+                user_id=user_id,
+                channel=channel,
+                chat_id=conversation_id,
+                created_at=now,
+                updated_at=now,
+                last_consolidated=0,
+                metadata={},
+                last_user_at=None,
+                last_proactive_at=None,
+                next_seq=0,
+            )
+        )
 
     def get_turn(self, *, user_id: str, turn_id: str) -> TurnRecord | None:
         with self.engine.connect() as conn:
@@ -304,10 +604,26 @@ class WebStore:
         return ConversationRecord(
             id=str(row["id"]),
             user_id=str(row["user_id"]),
+            session_key=str(row["session_key"]),
             title=str(row["title"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             archived=bool(row["archived"]),
+        )
+
+    @staticmethod
+    def _proactive_session_from_row(row: Any) -> ProactiveSessionRecord:
+        return ProactiveSessionRecord(
+            id=str(row["id"]),
+            user_id=str(row["user_id"]),
+            conversation_id=str(row["conversation_id"]),
+            session_key=str(row["session_key"]),
+            enabled=bool(row["enabled"]),
+            last_tick_at=row["last_tick_at"],
+            next_tick_at=row["next_tick_at"],
+            interval_seconds=int(row["interval_seconds"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )
 
     @staticmethod
@@ -332,9 +648,9 @@ class WebStore:
             id=str(row["id"]),
             conversation_id=str(row["conversation_id"]),
             user_id=str(row["user_id"]),
+            session_key=str(row["session_key"]),
             status=str(row["status"]),
             error=row["error"],
             created_at=row["created_at"],
             completed_at=row["completed_at"],
         )
-

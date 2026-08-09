@@ -26,6 +26,7 @@ from agent.plugins.registry import MetadataKind, PluginEventType, plugin_registr
 from agent.tool_hooks.base import ToolHook
 from agent.tool_hooks.types import HookContext, HookOutcome
 from bus.event_bus import EventBus
+from agent.config_models import Config
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class PluginManager:
         self,
         plugin_dirs: list[Path],
         *,
+        app_config: Config | None = None,
         event_bus: EventBus,
         tool_registry: Any = None,
         workspace: Path | None = None,
@@ -54,6 +56,7 @@ class PluginManager:
         memory_engine: Any = None,
     ) -> None:
         self._dirs = plugin_dirs
+        self._app_config = app_config
         self._event_bus = event_bus
         self._tool_registry = tool_registry
         self._workspace = workspace
@@ -185,6 +188,7 @@ class PluginManager:
             workspace=self._workspace,
             session_manager=self._session_manager,
             memory_engine=self._memory_engine,
+            app_config=self._app_config,
         )
         plugin_registry.register_instance(mp, instance)
         self._bind_handlers(instance, mp)

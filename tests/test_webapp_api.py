@@ -16,12 +16,20 @@ class FakeExecutor:
         self.delay = delay
         self.calls: list[dict[str, str]] = []
 
-    async def run(self, *, content: str, user_id: str, conversation_id: str) -> str:
+    async def run(
+        self,
+        *,
+        content: str,
+        user_id: str,
+        conversation_id: str,
+        session_key: str | None = None,
+    ) -> str:
         self.calls.append(
             {
                 "content": content,
                 "user_id": user_id,
                 "conversation_id": conversation_id,
+                "session_key": session_key or "",
             }
         )
         if self.delay:

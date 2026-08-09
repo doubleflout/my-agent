@@ -9,7 +9,11 @@ import uvicorn
 from agent.config_models import Config
 from core.net.http import SharedHttpResources
 from webapp.app import create_web_app
-from webapp.runtime_manager import UserRuntimeAgentExecutor, UserRuntimeManager
+from webapp.runtime_manager import (
+    UserRuntimeAgentExecutor,
+    UserRuntimeManager,
+    UserRuntimeProactiveRunner,
+)
 
 
 async def run_web_chat_server(
@@ -28,6 +32,7 @@ async def run_web_chat_server(
     app = create_web_app(
         workspace=workspace,
         agent_executor=UserRuntimeAgentExecutor(runtime_manager),
+        proactive_runner=UserRuntimeProactiveRunner(runtime_manager),
     )
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info"))
     try:

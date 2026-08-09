@@ -10,7 +10,7 @@ from bootstrap.memory import ensure_memory_plugin_storage
 from infra.persistence.json_store import save_json
 from proactive_v2.anyaction import QuotaStore
 from proactive_v2.loop import ProactiveLoop
-from proactive_v2.state import ProactiveStateStore
+from proactive_v2.state import build_proactive_state_store
 from session.store import SessionStore
 
 _EMPTY_FILES: dict[str, str] = {
@@ -147,14 +147,28 @@ def _ensure_workspace_db_assets(
     else:
         summary.skipped.append(consolidation_db)
 
-    proactive_db = workspace / "proactive.db"
     quota_path = workspace / "proactive_quota.json"
-    proactive_exists = proactive_db.exists()
-    ProactiveStateStore(proactive_db).close()
-    if not proactive_exists:
-        summary.created.append(proactive_db)
+    storage = getattr(config, "storage", None)
+    backend = str(getattr(storage, "backend", "sqlite") or "sqlite").lower()
+    postgres = getattr(storage, "postgres", None)
+    proactive_db = workspace / "proactive.db"
+    if backend == "postgres":
+        build_proactive_state_store(
+            backend=backend,
+            workspace_dir=workspace,
+            database_url=str(getattr(postgres, "database_url", "") or ""),
+        ).close()
+        summary.notes.append("proactive state uses PostgreSQL; skipped local proactive.db")
     else:
-        summary.skipped.append(proactive_db)
+        proactive_exists = proactive_db.exists()
+        build_proactive_state_store(
+            backend=backend,
+            workspace_dir=workspace,
+        ).close()
+        if not proactive_exists:
+            summary.created.append(proactive_db)
+        else:
+            summary.skipped.append(proactive_db)
     if not quota_path.exists():
         save_json(
             quota_path,
@@ -191,16 +205,14 @@ def init_user_workspace(
     _ensure_workspace_json_assets(workspace, force=False, summary=summary)
     _ensure_workspace_directories(workspace, summary=summary)
 
-    if config is not None and config.memory.enabled:
-        storage_results = ensure_memory_plugin_storage(config, workspace)
-        if storage_results:
-            for path, existed in storage_results:
-                if existed:
-                    summary.skipped.append(path)
-                else:
-                    summary.created.append(path)
+    if config is not None:
+        _ensure_workspace_db_assets(
+            workspace,
+            config=config,
+            summary=summary,
+        )
 
-    summary.notes.append(f"用户工作区已初始化: {workspace}")
+    summary.notes.append(f"User workspace initialized: {workspace}")
     return summary
 
 

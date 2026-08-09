@@ -98,6 +98,25 @@ CREATE TABLE IF NOT EXISTS agent_turns (
 CREATE INDEX IF NOT EXISTS ix_agent_turns_user_status
 ON agent_turns(user_id, status, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS proactive_sessions (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    conversation_id UUID NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
+    session_key TEXT NOT NULL UNIQUE REFERENCES sessions(key) ON DELETE CASCADE,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    last_tick_at TIMESTAMPTZ,
+    next_tick_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    interval_seconds INTEGER NOT NULL DEFAULT 4800,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_proactive_sessions_due
+ON proactive_sessions(enabled, next_tick_at);
+
+CREATE INDEX IF NOT EXISTS ix_proactive_sessions_user
+ON proactive_sessions(user_id, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS seen_items (
     source_key TEXT NOT NULL,
     item_id TEXT NOT NULL,

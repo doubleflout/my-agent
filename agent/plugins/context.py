@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from agent.config_models import Config
     from agent.plugins.config import PluginConfig
 
 
@@ -20,6 +21,7 @@ class PluginContext:
     workspace: Path | None = None
     session_manager: Any = None
     memory_engine: Any = None
+    app_config: "Config | None" = None
 
 
 class PluginKVStore:
