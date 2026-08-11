@@ -1,10 +1,14 @@
 from __future__ import annotations
+import asyncio
+import json
 from typing import Any, cast
 
 from pathlib import Path
 from types import SimpleNamespace
 
 from agent.tools.registry import ToolRegistry
+from agent.tools.meta import register_common_meta_tools
+from bootstrap.toolsets.meta import build_readonly_tools
 from bootstrap.toolsets.protocol import (
     ToolsetRegistrationResult,
     build_registration_result,
@@ -136,3 +140,91 @@ def test_build_registration_result_uses_public_registry_names():
 
     assert result.tool_names == ["always", "b"]
     assert result.always_on_names == ["always"]
+
+
+def test_registered_shell_tool_defaults_to_workspace(monkeypatch, tmp_path: Path):
+    workspace = tmp_path / "user-workspace"
+    workspace.mkdir()
+    observed: dict[str, object] = {}
+
+    class _FakeProc:
+        returncode = 0
+        pid = 1234
+
+        def __init__(self) -> None:
+            self._stdout = b"ok"
+            self.stdout = SimpleNamespace(read=self._read_stdout)
+            self.stderr = SimpleNamespace(read=self._read_stderr)
+
+        async def _read_stdout(self, _size: int = -1):
+            data = self._stdout
+            self._stdout = b""
+            return data
+
+        async def _read_stderr(self, _size: int = -1):
+            return b""
+
+        async def wait(self):
+            return self.returncode
+
+    async def _fake_create_subprocess_shell(command, **kwargs):
+        observed["command"] = command
+        observed["kwargs"] = kwargs
+        return _FakeProc()
+
+    monkeypatch.setattr(
+        "agent.tools.shell.asyncio.create_subprocess_shell",
+        _fake_create_subprocess_shell,
+    )
+
+    readonly = build_readonly_tools(
+        cast(Any, SimpleNamespace(external_default=object())),
+        allowed_dir=workspace,
+    )
+    registry = ToolRegistry()
+    register_common_meta_tools(
+        registry,
+        readonly,
+        session_store=object(),
+        workspace=workspace,
+    )
+
+    shell = registry.get_tool("shell")
+    assert shell is not None
+    result = json.loads(asyncio.run(shell.execute(command="echo ok", description="cwd")))
+
+    observed_kwargs = cast(dict[str, object], observed["kwargs"])
+    assert result["exit_code"] == 0
+    assert observed_kwargs["cwd"] == str(workspace)
+
+
+def test_filesystem_tools_are_scoped_to_workspace(tmp_path: Path):
+    workspace = tmp_path / "user-workspace"
+    outside = tmp_path / "outside.txt"
+    inside = workspace / "inside.txt"
+    workspace.mkdir()
+    outside.write_text("outside", encoding="utf-8")
+    inside.write_text("inside", encoding="utf-8")
+
+    readonly = build_readonly_tools(
+        cast(Any, SimpleNamespace(external_default=object())),
+        allowed_dir=workspace,
+    )
+    registry = ToolRegistry()
+    register_common_meta_tools(
+        registry,
+        readonly,
+        session_store=object(),
+        workspace=workspace,
+    )
+
+    read_file = registry.get_tool("read_file")
+    write_file = registry.get_tool("write_file")
+    assert read_file is not None
+    assert write_file is not None
+
+    assert "inside" in asyncio.run(read_file.execute(path="inside.txt"))
+    assert "超出允许目录" in asyncio.run(read_file.execute(path=str(outside)))
+    assert "超出允许目录" in asyncio.run(
+        write_file.execute(path=str(outside), content="blocked")
+    )

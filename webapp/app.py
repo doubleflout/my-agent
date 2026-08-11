@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,15 +35,11 @@ from webapp.security import (
 )
 from webapp.sse import TurnStreamBroker
 from webapp.runtime_manager import UserWorkspaceResolver
-from webapp.store import DuplicateEmailError, UserRecord, WebStore, default_database_url
+from webapp.store import DuplicateEmailError, UserRecord, WebStore, database_url_from_config
 
 
 def _secret_from_env() -> str:
     return os.environ.get("AKASHIC_WEB_JWT_SECRET", "dev-secret-change-me")
-
-
-def _database_url_from_env(workspace: Path) -> str:
-    return os.environ.get("AKASHIC_WEB_DATABASE_URL") or default_database_url(workspace)
 
 
 def create_web_app(
@@ -59,7 +57,7 @@ def create_web_app(
         app_config = Config.load("config.toml")
     except Exception:
         app_config = None
-    web_store = store or WebStore(_database_url_from_env(workspace))
+    web_store = store or WebStore(database_url_from_config(app_config, workspace))
     executor = agent_executor or AgentLoopExecutor(agent_loop)
     broker = TurnStreamBroker()
     limiter = _build_rate_limiter()
@@ -120,6 +118,15 @@ def create_web_app(
             created_at=user.created_at,
         )
 
+    def conversation_to_response(conv) -> ConversationResponse:
+        return ConversationResponse(
+            id=conv.id,
+            title=conv.title,
+            session_key=conv.session_key,
+            created_at=conv.created_at,
+            updated_at=conv.updated_at,
+        )
+
     def get_current_user(authorization: str | None = Header(default=None)) -> UserRecord:
         if not authorization or not authorization.lower().startswith("bearer "):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing token")
@@ -169,26 +176,22 @@ def create_web_app(
         user: UserRecord = Depends(get_current_user),
     ) -> ConversationResponse:
         conv = web_store.create_conversation(user_id=user.id, title=payload.title)
-        return ConversationResponse(
-            id=conv.id,
-            title=conv.title,
-            created_at=conv.created_at,
-            updated_at=conv.updated_at,
-        )
+        return conversation_to_response(conv)
 
     @app.get("/api/conversations", response_model=list[ConversationResponse])
     async def list_conversations(
         user: UserRecord = Depends(get_current_user),
     ) -> list[ConversationResponse]:
-        return [
-            ConversationResponse(
-                id=conv.id,
-                title=conv.title,
-                created_at=conv.created_at,
-                updated_at=conv.updated_at,
-            )
-            for conv in web_store.list_conversations(user_id=user.id)
-        ]
+        return [conversation_to_response(conv) for conv in web_store.list_conversations(user_id=user.id)]
+
+    @app.get("/api/proactive/conversation", response_model=ConversationResponse)
+    async def get_proactive_conversation(
+        user: UserRecord = Depends(get_current_user),
+    ) -> ConversationResponse:
+        conv = web_store.get_default_proactive_conversation(user_id=user.id)
+        if conv is None:
+            conv = web_store.ensure_default_proactive_session(user_id=user.id)
+        return conversation_to_response(conv)
 
     @app.get(
         "/api/conversations/{conversation_id}/messages",
@@ -228,13 +231,6 @@ def create_web_app(
                 conversation_id=conversation_id,
                 session_key=session_key,
             )
-            web_store.add_message(
-                conversation_id=conversation_id,
-                user_id=user_id,
-                role="assistant",
-                content=response,
-                metadata={"turn_id": turn_id},
-            )
             web_store.update_turn(turn_id=turn_id, status="completed")
             await broker.publish(turn_id, {"event": "content_delta", "data": {"text": response}})
             await broker.publish(turn_id, {"event": "done", "data": {"turn_id": turn_id}})
@@ -264,13 +260,6 @@ def create_web_app(
         except RateLimitExceeded as exc:
             raise HTTPException(status_code=429, detail=str(exc)) from exc
         try:
-            message = web_store.add_message(
-                conversation_id=conversation_id,
-                user_id=user.id,
-                role="user",
-                content=payload.content,
-                metadata={},
-            )
             turn = web_store.create_turn(user_id=user.id, conversation_id=conversation_id)
             asyncio.create_task(
                 run_turn(
@@ -288,12 +277,12 @@ def create_web_app(
             raise
         return CreateMessageResponse(
             message=MessageResponse(
-                id=message.id,
-                conversation_id=message.conversation_id,
-                role=message.role,
-                content=message.content,
-                metadata=message.metadata,
-                created_at=message.created_at,
+                id=f"pending:{uuid.uuid4()}",
+                conversation_id=conversation_id,
+                role="user",
+                content=payload.content,
+                metadata={"pending": True},
+                created_at=datetime.now(timezone.utc),
             ),
             turn_id=turn.id,
             session_key=conv.session_key,

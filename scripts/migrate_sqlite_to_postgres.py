@@ -806,7 +806,12 @@ def migrate_webapp(pg: psycopg.Connection[Any], *, workspace: Path) -> dict[str,
         counts["users"] = counts.get("users", 0) + 1
 
     for row in sqlite_rows(db_path, "conversations"):
-        session_key = f"web:{row['user_id']}:{row['id']}"
+        row_keys = set(row.keys())
+        session_key = (
+            str(row["session_key"])
+            if "session_key" in row_keys and row["session_key"]
+            else f"web:{row['user_id']}:{row['id']}"
+        )
         ensure_session(
             pg,
             session_key=session_key,
@@ -843,32 +848,67 @@ def migrate_webapp(pg: psycopg.Connection[Any], *, workspace: Path) -> dict[str,
         )
         counts["conversations"] = counts.get("conversations", 0) + 1
 
+    conversation_sessions = {}
+    for row in sqlite_rows(db_path, "conversations"):
+        row_keys = set(row.keys())
+        conversation_sessions[str(row["id"])] = (
+            str(row["session_key"])
+            if "session_key" in row_keys and row["session_key"]
+            else f"web:{row['user_id']}:{row['id']}"
+        )
     for row in sqlite_rows(db_path, "chat_messages"):
+        conversation_id = str(row["conversation_id"])
+        session_key = conversation_sessions.get(conversation_id)
+        if not session_key:
+            session_key = f"web:{row['user_id']}:{conversation_id}"
+        exists = pg.execute(
+            """
+            SELECT 1
+            FROM messages
+            WHERE session_key = %s AND role = %s AND content = %s AND ts = %s
+            LIMIT 1
+            """,
+            (session_key, row["role"], row["content"], row["created_at"]),
+        ).fetchone()
+        if exists:
+            continue
+        seq_row = pg.execute(
+            """
+            SELECT GREATEST(
+                COALESCE((SELECT next_seq FROM sessions WHERE key = %s), 0),
+                COALESCE((SELECT MAX(seq) + 1 FROM messages WHERE session_key = %s), 0)
+            )
+            """,
+            (session_key, session_key),
+        ).fetchone()
+        seq = int((seq_row[0] if seq_row else 0) or 0)
+        message_id = f"{session_key}:webapp:{row['id']}"
         pg.execute(
             """
-            INSERT INTO chat_messages(
-                id, conversation_id, user_id, role, content, metadata_json, created_at
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT(id) DO UPDATE SET
-                conversation_id = excluded.conversation_id,
-                user_id = excluded.user_id,
-                role = excluded.role,
-                content = excluded.content,
-                metadata_json = excluded.metadata_json,
-                created_at = excluded.created_at
+            INSERT INTO messages(id, session_key, user_id, seq, role, content, tool_chain, extra, ts)
+            VALUES (%s, %s, %s, %s, %s, %s, NULL, %s, %s)
+            ON CONFLICT(id) DO NOTHING
             """,
             (
-                row["id"],
-                row["conversation_id"],
+                message_id,
+                session_key,
                 row["user_id"],
+                seq,
                 row["role"],
                 row["content"],
-                row["metadata_json"],
+                Jsonb(parse_json(row["metadata_json"], {})),
                 row["created_at"],
             ),
         )
-        counts["chat_messages"] = counts.get("chat_messages", 0) + 1
+        pg.execute(
+            """
+            UPDATE sessions
+            SET next_seq = GREATEST(next_seq, %s), updated_at = GREATEST(updated_at, %s)
+            WHERE key = %s
+            """,
+            (seq + 1, row["created_at"], session_key),
+        )
+        counts["messages_from_chat_messages"] = counts.get("messages_from_chat_messages", 0) + 1
 
     for row in sqlite_rows(db_path, "agent_turns"):
         session_key = f"web:{row['user_id']}:{row['conversation_id']}"
@@ -898,6 +938,39 @@ def migrate_webapp(pg: psycopg.Connection[Any], *, workspace: Path) -> dict[str,
             ),
         )
         counts["agent_turns"] = counts.get("agent_turns", 0) + 1
+
+    for row in sqlite_rows(db_path, "proactive_sessions"):
+        pg.execute(
+            """
+            INSERT INTO proactive_sessions(
+                id, user_id, conversation_id, session_key, enabled,
+                last_tick_at, next_tick_at, interval_seconds, created_at, updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT(id) DO UPDATE SET
+                user_id = excluded.user_id,
+                conversation_id = excluded.conversation_id,
+                session_key = excluded.session_key,
+                enabled = excluded.enabled,
+                last_tick_at = excluded.last_tick_at,
+                next_tick_at = excluded.next_tick_at,
+                interval_seconds = excluded.interval_seconds,
+                updated_at = excluded.updated_at
+            """,
+            (
+                row["id"],
+                row["user_id"],
+                row["conversation_id"],
+                row["session_key"],
+                bool(row["enabled"]),
+                row["last_tick_at"],
+                row["next_tick_at"],
+                row["interval_seconds"],
+                row["created_at"],
+                row["updated_at"],
+            ),
+        )
+        counts["proactive_sessions"] = counts.get("proactive_sessions", 0) + 1
     return counts
 
 

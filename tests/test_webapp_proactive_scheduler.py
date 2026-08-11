@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from webapp.proactive_scheduler import WebProactiveJob, WebProactiveScheduler
@@ -48,7 +49,11 @@ class _Runner:
         return self.content
 
 
-async def test_scheduler_runs_due_session_and_writes_message() -> None:
+def test_scheduler_runs_due_session_and_writes_message() -> None:
+    asyncio.run(_run_scheduler_runs_due_session_and_writes_message())
+
+
+async def _run_scheduler_runs_due_session_and_writes_message() -> None:
     store = _Store()
     runner = _Runner("主动问候")
     scheduler = WebProactiveScheduler(
@@ -65,7 +70,11 @@ async def test_scheduler_runs_due_session_and_writes_message() -> None:
     assert store.scheduled == ["web:proactive:user-1:conversation-1"]
 
 
-async def test_scheduler_reschedules_when_runner_skips_message() -> None:
+def test_scheduler_reschedules_when_runner_skips_message() -> None:
+    asyncio.run(_run_scheduler_reschedules_when_runner_skips_message())
+
+
+async def _run_scheduler_reschedules_when_runner_skips_message() -> None:
     store = _Store()
     runner = _Runner(None)
     scheduler = WebProactiveScheduler(

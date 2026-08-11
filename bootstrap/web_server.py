@@ -14,6 +14,7 @@ from webapp.runtime_manager import (
     UserRuntimeManager,
     UserRuntimeProactiveRunner,
 )
+from webapp.store import WebStore, database_url_from_config
 
 
 async def run_web_chat_server(
@@ -29,10 +30,12 @@ async def run_web_chat_server(
         base_workspace=workspace,
         http_resources=http_resources,
     )
+    web_store = WebStore(database_url_from_config(config, workspace))
     app = create_web_app(
         workspace=workspace,
+        store=web_store,
         agent_executor=UserRuntimeAgentExecutor(runtime_manager),
-        proactive_runner=UserRuntimeProactiveRunner(runtime_manager),
+        proactive_runner=UserRuntimeProactiveRunner(runtime_manager, web_store),
     )
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info"))
     try:
@@ -40,4 +43,5 @@ async def run_web_chat_server(
     finally:
         with contextlib.suppress(asyncio.CancelledError):
             await runtime_manager.aclose()
+        web_store.close()
         await http_resources.aclose()

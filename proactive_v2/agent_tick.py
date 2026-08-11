@@ -835,6 +835,7 @@ class AgentTick:
                 arguments=tool_args,
                 source="proactive",
                 session_key=self._session_key,
+                turn_id=ctx.tick_id,
             ),
             lambda name, args: dispatch(name, args, ctx, self._tool_deps),
         )

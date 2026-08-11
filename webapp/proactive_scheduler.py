@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from agent.config_models import Config
@@ -80,6 +80,13 @@ class WebProactiveScheduler:
                 session_key=record.session_key,
                 due_at=record.next_tick_at,
             )
+            logger.info(
+                "[web.proactive] entering proactive session user=%s conversation=%s session=%s due_at=%s",
+                job.user_id,
+                job.conversation_id,
+                job.session_key,
+                job.due_at.isoformat(),
+            )
             try:
                 content = await self._runner.run(job)
                 if content:
@@ -101,8 +108,17 @@ class WebProactiveScheduler:
                     record.user_id,
                 )
             finally:
-                self._store.schedule_next_proactive_tick(
+                interval = self._store.schedule_next_proactive_tick(
                     session_key=record.session_key,
                     cfg=self._config.proactive,
                     now=now,
+                )
+                next_tick_at = now + timedelta(seconds=interval)
+                logger.info(
+                    "[web.proactive] scheduled next tick user=%s conversation=%s session=%s interval=%ss next_tick_at=%s",
+                    record.user_id,
+                    record.conversation_id,
+                    record.session_key,
+                    interval,
+                    next_tick_at.isoformat(),
                 )

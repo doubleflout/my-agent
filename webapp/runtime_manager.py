@@ -1,25 +1,29 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import random as _random_module
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from agent.config_models import Config
+from agent.looping.ports import SessionServices
+from agent.turns.orchestrator import TurnOrchestrator, TurnOrchestratorDeps
+from agent.turns.outbound import OutboundDispatch, OutboundPort
 from bootstrap.tools import CoreRuntime, build_core_runtime
 from core.net.http import SharedHttpResources
+from proactive_v2.agent_tick_factory import AgentTickDeps, AgentTickFactory
+from proactive_v2.anyaction import AnyActionGate, QuotaStore
+from proactive_v2.judge import MessageDeduper
+from proactive_v2.mcp_sources import McpClientPool
+from proactive_v2.sensor import Sensor
+from proactive_v2.state import build_proactive_state_store
 from webapp.agent_executor import AgentExecutor, web_session_key
 from webapp.proactive_scheduler import WebProactiveJob
-
-
-_PROACTIVE_TICK_PROMPT = """[proactive tick]
-你正在为当前用户的默认主动会话生成一条主动消息。
-请结合长期记忆、最近上下文和主动消息规则判断现在是否应该发起对话。
-如果现在不适合主动打扰，或者没有足够自然的话题，只返回 NO_PROACTIVE_CONTENT。
-如果适合，只返回一条会直接展示给用户的中文消息，不要解释决策过程。
-"""
+from webapp.store import WebStore
 
 
 class UserWorkspaceResolver:
@@ -139,19 +143,136 @@ class UserRuntimeAgentExecutor(AgentExecutor):
 
 
 class UserRuntimeProactiveRunner:
-    def __init__(self, runtime_manager: UserRuntimeManager) -> None:
+    def __init__(self, runtime_manager: UserRuntimeManager, store: WebStore) -> None:
         self.runtime_manager = runtime_manager
+        self.store = store
 
     async def run(self, job: WebProactiveJob) -> str | None:
         runtime = await self.runtime_manager.get_runtime(job.user_id)
-        response = await runtime.loop.process_direct(
-            content=_PROACTIVE_TICK_PROMPT,
-            session_key=job.session_key,
-            channel="web_proactive",
-            chat_id=job.conversation_id,
-            stream_events=False,
+        workspace = self.runtime_manager.workspace_for_user(job.user_id)
+        proactive_cfg = replace(
+            self.runtime_manager.config.proactive,
+            default_channel="web_proactive",
+            default_chat_id=job.conversation_id,
         )
-        text = str(response or "").strip()
-        if not text or text == "NO_PROACTIVE_CONTENT":
+        state_store = build_proactive_state_store(
+            backend=getattr(self.runtime_manager.config.storage, "backend", "sqlite"),
+            workspace_dir=workspace,
+            database_url=self.runtime_manager.config.storage.postgres.database_url,
+        )
+        pool = McpClientPool(workspace)
+        await pool.connect_all()
+        try:
+            sense = Sensor(
+                cfg=proactive_cfg,
+                sessions=runtime.session_manager,
+                state=state_store,
+                memory=runtime.memory_runtime.markdown.store,
+                presence=runtime.presence,
+                rng=_random_module.Random(),
+                target_session_key=job.session_key,
+            )
+            anyaction = AnyActionGate(
+                cfg=proactive_cfg,
+                quota_store=QuotaStore(Path(state_store.workspace_dir) / "proactive_quota.json"),
+                rng=_random_module.Random(),
+            )
+            deduper = (
+                MessageDeduper(
+                    provider=runtime.provider,
+                    model=proactive_cfg.agent_tick_model or proactive_cfg.model or runtime.config.model,
+                    max_tokens=1024,
+                )
+                if proactive_cfg.message_dedupe_enabled
+                else None
+            )
+            orchestrator = TurnOrchestrator(
+                TurnOrchestratorDeps(
+                    session=SessionServices(
+                        session_manager=runtime.session_manager,
+                        presence=runtime.presence,
+                    ),
+                    outbound=_WebProactiveOutboundPort(
+                        store=self.store,
+                        user_id=job.user_id,
+                        conversation_id=job.conversation_id,
+                        session_key=job.session_key,
+                    ),
+                )
+            )
+            tick = AgentTickFactory(
+                AgentTickDeps(
+                    cfg=proactive_cfg,
+                    sense=sense,
+                    presence=runtime.presence,
+                    provider=runtime.provider,
+                    model=proactive_cfg.model or runtime.config.model,
+                    max_tokens=1024,
+                    memory=runtime.memory_runtime,
+                    state_store=state_store,
+                    any_action_gate=anyaction,
+                    passive_busy_fn=lambda _session_key: False,
+                    deduper=deduper,
+                    rng=_random_module.Random(),
+                    workspace_context_fn=lambda: _read_web_proactive_context(workspace),
+                    shared_tools=runtime.tools,
+                    turn_orchestrator=orchestrator,
+                    pool=pool,
+                    tool_hooks=list(getattr(runtime.plugin_manager, "tool_hooks", []) or []),
+                    target_session_key=job.session_key,
+                    target_channel="web_proactive",
+                    target_chat_id=job.conversation_id,
+                )
+            ).build()
+            await tick.tick()
             return None
-        return text
+        finally:
+            await pool.disconnect_all()
+            close = getattr(state_store, "close", None)
+            if callable(close):
+                with contextlib.suppress(Exception):
+                    close()
+
+
+class _WebProactiveOutboundPort(OutboundPort):
+    def __init__(
+        self,
+        *,
+        store: WebStore,
+        user_id: str,
+        conversation_id: str,
+        session_key: str,
+    ) -> None:
+        self._store = store
+        self._user_id = user_id
+        self._conversation_id = conversation_id
+        self._session_key = session_key
+
+    async def dispatch(self, outbound: OutboundDispatch) -> bool:
+        content = str(outbound.content or "").strip()
+        media = [str(item).strip() for item in outbound.media if str(item).strip()]
+        if not content and not media:
+            return False
+        metadata: dict[str, Any] = {
+            "source": "proactive",
+            "session_key": self._session_key,
+            **dict(outbound.metadata or {}),
+        }
+        if media:
+            metadata["media"] = media
+        self._store.add_message(
+            conversation_id=self._conversation_id,
+            user_id=self._user_id,
+            role="assistant",
+            content=content,
+            metadata=metadata,
+        )
+        return True
+
+
+def _read_web_proactive_context(workspace: Path) -> str:
+    path = workspace / "PROACTIVE_CONTEXT.md"
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""

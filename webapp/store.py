@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import quote_plus
 
 from sqlalchemy import (
     Boolean,
@@ -19,7 +21,9 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     create_engine,
+    func,
     inspect,
     select,
     text,
@@ -137,16 +141,19 @@ sessions = Table(
     Column("next_seq", Integer, nullable=False, default=0),
 )
 
-chat_messages = Table(
-    "chat_messages",
+messages = Table(
+    "messages",
     metadata,
-    Column("id", String(36), primary_key=True),
-    Column("conversation_id", String(36), ForeignKey("conversations.id"), nullable=False, index=True),
-    Column("user_id", String(36), ForeignKey("users.id"), nullable=False, index=True),
-    Column("role", String(32), nullable=False),
-    Column("content", Text, nullable=False),
-    Column("metadata_json", Text, nullable=False, default="{}"),
-    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("id", Text, primary_key=True),
+    Column("session_key", Text, ForeignKey("sessions.key"), nullable=False, index=True),
+    Column("user_id", String(36), ForeignKey("users.id")),
+    Column("seq", Integer, nullable=False),
+    Column("role", Text, nullable=False),
+    Column("content", Text),
+    Column("tool_chain", JSON),
+    Column("extra", JSON, nullable=False, default=dict),
+    Column("ts", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("session_key", "seq", name="ux_messages_session_seq"),
 )
 
 agent_turns = Table(
@@ -189,6 +196,26 @@ def _web_proactive_session_key(user_id: str, conversation_id: str) -> str:
 def default_database_url(workspace: Path) -> str:
     db_path = workspace / "webapp.db"
     return "sqlite:///" + db_path.as_posix()
+
+
+def database_url_from_config(config: Any | None, workspace: Path) -> str:
+    env_url = os.environ.get("AKASHIC_WEB_DATABASE_URL", "").strip()
+    if env_url:
+        return env_url
+    storage = getattr(config, "storage", None)
+    if str(getattr(storage, "backend", "")).lower() != "postgres":
+        return default_database_url(workspace)
+    pg = getattr(storage, "postgres", None)
+    configured = str(getattr(pg, "database_url", "") or "").strip()
+    if configured:
+        return configured
+    host = str(getattr(pg, "host", "localhost") or "localhost")
+    port = int(getattr(pg, "port", 5432) or 5432)
+    database = str(getattr(pg, "database", "akashic_agent") or "akashic_agent")
+    user = quote_plus(str(getattr(pg, "user", "postgres") or "postgres"))
+    password = quote_plus(str(getattr(pg, "password", "") or ""))
+    auth = user if not password else f"{user}:{password}"
+    return f"postgresql+psycopg://{auth}@{host}:{port}/{database}"
 
 
 class WebStore:
@@ -320,7 +347,7 @@ class WebStore:
         self,
         *,
         user_id: str,
-        title: str = "Proactive",
+        title: str = "主动推送",
         interval_seconds: int = 4800,
     ) -> ConversationRecord:
         now = utcnow()
@@ -382,6 +409,26 @@ class WebStore:
                 )
             )
         return ConversationRecord(cid, user_id, session_key, clean_title, now, now, False)
+
+    def get_default_proactive_conversation(self, *, user_id: str) -> ConversationRecord | None:
+        with self.engine.connect() as conn:
+            row = conn.execute(
+                select(conversations)
+                .select_from(
+                    conversations.join(
+                        proactive_sessions,
+                        conversations.c.id == proactive_sessions.c.conversation_id,
+                    )
+                )
+                .where(
+                    proactive_sessions.c.user_id == user_id,
+                    proactive_sessions.c.enabled == True,  # noqa: E712
+                    conversations.c.archived == False,  # noqa: E712
+                )
+                .order_by(proactive_sessions.c.created_at.asc())
+                .limit(1)
+            ).mappings().first()
+        return self._conversation_from_row(row) if row is not None else None
 
     def list_due_proactive_sessions(
         self,
@@ -453,9 +500,17 @@ class WebStore:
 
     def list_conversations(self, *, user_id: str) -> list[ConversationRecord]:
         with self.engine.connect() as conn:
+            proactive_conversation_ids = select(proactive_sessions.c.conversation_id).where(
+                proactive_sessions.c.user_id == user_id,
+                proactive_sessions.c.enabled == True,  # noqa: E712
+            )
             rows = conn.execute(
                 select(conversations)
-                .where(conversations.c.user_id == user_id, conversations.c.archived == False)  # noqa: E712
+                .where(
+                    conversations.c.user_id == user_id,
+                    conversations.c.archived == False,  # noqa: E712
+                    conversations.c.id.not_in(proactive_conversation_ids),
+                )
                 .order_by(conversations.c.updated_at.desc())
             ).mappings().all()
         return [self._conversation_from_row(row) for row in rows]
@@ -480,20 +535,53 @@ class WebStore:
         content: str,
         metadata: dict[str, Any] | None = None,
     ) -> MessageRecord:
-        mid = str(uuid.uuid4())
         now = utcnow()
         meta = metadata or {}
         with self._begin() as conn:
+            conv = conn.execute(
+                select(conversations.c.session_key).where(
+                    conversations.c.id == conversation_id,
+                    conversations.c.user_id == user_id,
+                )
+            ).mappings().first()
+            if conv is None:
+                raise KeyError(conversation_id)
+            session_key = str(conv["session_key"])
+            session_seq_row = conn.execute(
+                select(sessions.c.next_seq).where(sessions.c.key == session_key)
+            ).mappings().first()
+            message_seq_row = conn.execute(
+                select(func.max(messages.c.seq)).where(messages.c.session_key == session_key)
+            ).first()
+            session_next = int((session_seq_row["next_seq"] if session_seq_row else 0) or 0)
+            message_next = int((message_seq_row[0] if message_seq_row and message_seq_row[0] is not None else -1) + 1)
+            seq = max(session_next, message_next)
+            mid = f"{session_key}:{seq}"
             conn.execute(
-                chat_messages.insert().values(
+                messages.insert().values(
                     id=mid,
-                    conversation_id=conversation_id,
+                    session_key=session_key,
                     user_id=user_id,
+                    seq=seq,
                     role=role,
                     content=content,
-                    metadata_json=json.dumps(meta, ensure_ascii=False),
-                    created_at=now,
+                    tool_chain=None,
+                    extra=meta,
+                    ts=now,
                 )
+            )
+            session_values: dict[str, Any] = {
+                "updated_at": now,
+                "next_seq": seq + 1,
+            }
+            if role == "user":
+                session_values["last_user_at"] = now
+            if meta.get("source") == "proactive":
+                session_values["last_proactive_at"] = now
+            conn.execute(
+                sessions.update()
+                .where(sessions.c.key == session_key)
+                .values(**session_values)
             )
             conn.execute(
                 conversations.update()
@@ -504,15 +592,24 @@ class WebStore:
 
     def list_messages(self, *, user_id: str, conversation_id: str) -> list[MessageRecord]:
         with self.engine.connect() as conn:
-            rows = conn.execute(
-                select(chat_messages)
-                .where(
-                    chat_messages.c.user_id == user_id,
-                    chat_messages.c.conversation_id == conversation_id,
+            conv = conn.execute(
+                select(conversations.c.session_key).where(
+                    conversations.c.id == conversation_id,
+                    conversations.c.user_id == user_id,
+                    conversations.c.archived == False,  # noqa: E712
                 )
-                .order_by(chat_messages.c.created_at.asc())
+            ).mappings().first()
+            if conv is None:
+                return []
+            session_key = str(conv["session_key"])
+            rows = conn.execute(
+                select(messages)
+                .where(
+                    messages.c.session_key == session_key,
+                )
+                .order_by(messages.c.seq.asc(), messages.c.ts.asc())
             ).mappings().all()
-        return [self._message_from_row(row) for row in rows]
+        return [self._message_from_session_row(row, conversation_id=conversation_id, user_id=user_id) for row in rows]
 
     def create_turn(self, *, user_id: str, conversation_id: str) -> TurnRecord:
         tid = str(uuid.uuid4())
@@ -640,6 +737,33 @@ class WebStore:
             content=str(row["content"]),
             metadata=meta,
             created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _message_from_session_row(
+        row: Any,
+        *,
+        conversation_id: str,
+        user_id: str,
+    ) -> MessageRecord:
+        extra = row["extra"] or {}
+        if isinstance(extra, str):
+            try:
+                meta = json.loads(extra or "{}")
+            except Exception:
+                meta = {}
+        elif isinstance(extra, dict):
+            meta = dict(extra)
+        else:
+            meta = {}
+        return MessageRecord(
+            id=str(row["id"]),
+            conversation_id=conversation_id,
+            user_id=str(row["user_id"] or user_id),
+            role=str(row["role"]),
+            content=str(row["content"] or ""),
+            metadata=meta,
+            created_at=row["ts"],
         )
 
     @staticmethod

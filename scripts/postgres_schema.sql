@@ -68,22 +68,6 @@ ON messages(session_key, seq);
 CREATE INDEX IF NOT EXISTS ix_messages_user_ts
 ON messages(user_id, ts DESC);
 
-CREATE TABLE IF NOT EXISTS chat_messages (
-    id UUID PRIMARY KEY,
-    conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    metadata_json TEXT NOT NULL DEFAULT '{}',
-    created_at TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS ix_chat_messages_conversation_created
-ON chat_messages(conversation_id, created_at);
-
-CREATE INDEX IF NOT EXISTS ix_chat_messages_user_created
-ON chat_messages(user_id, created_at DESC);
-
 CREATE TABLE IF NOT EXISTS agent_turns (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

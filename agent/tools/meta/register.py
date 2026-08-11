@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, cast
+from pathlib import Path
 
 from agent.tools.filesystem import EditFileTool, WriteFileTool
 from agent.tools.forget_memory import ForgetMemoryTool
@@ -20,11 +21,12 @@ def register_common_meta_tools(
     tools: ToolRegistry,
     readonly_tools: dict[str, Tool],
     session_store: Any,
+    workspace: Path | None = None,
     push_tool: MessagePushTool | None = None,
 ) -> MessagePushTool:
     tools.register(ToolSearchTool(tools), always_on=True, risk="read-only")
     tools.register(
-        ShellTool(),
+        ShellTool(working_dir=workspace, restricted_dir=workspace),
         always_on=True,
         risk="external-side-effect",
         search_hint="终端 脚本 bash 命令",
@@ -83,12 +85,12 @@ def register_common_meta_tools(
         risk="external-side-effect",
     )
     tools.register(
-        WriteFileTool(),
+        WriteFileTool(allowed_dir=workspace),
         always_on=True,
         risk="write",
     )
     tools.register(
-        EditFileTool(),
+        EditFileTool(allowed_dir=workspace),
         always_on=True,
         risk="write",
     )

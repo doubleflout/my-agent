@@ -68,6 +68,14 @@ async def create_conversation(client: httpx.AsyncClient, token: str) -> str:
     return res.json()["id"]
 
 
+async def wait_for_executor_call(executor: FakeExecutor, count: int = 1) -> None:
+    for _ in range(50):
+        if len(executor.calls) >= count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"expected {count} executor calls, got {len(executor.calls)}")
+
+
 async def test_register_login_and_me(tmp_path):
     app = make_app(tmp_path)
     async with httpx.AsyncClient(
@@ -98,6 +106,25 @@ async def test_register_login_and_me(tmp_path):
         assert login.status_code == 200
 
 
+async def test_proactive_conversation_endpoint_returns_default_session(tmp_path):
+    app = make_app(tmp_path)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        token = await register(client, "proactive@example.com")
+
+        res = await client.get(
+            "/api/proactive/conversation",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["title"] == "主动推送"
+        assert body["session_key"].startswith("web:proactive:")
+
+
 async def test_conversation_isolation_and_session_key(tmp_path):
     executor = FakeExecutor()
     app = make_app(tmp_path, executor)
@@ -122,11 +149,12 @@ async def test_conversation_isolation_and_session_key(tmp_path):
         )
         assert post.status_code == 200, post.text
         body = post.json()
+        await wait_for_executor_call(executor)
         user_id = executor.calls[0]["user_id"]
         assert body["session_key"] == web_session_key(user_id, conv_a)
 
 
-async def test_turn_stream_done_and_persists_assistant_message(tmp_path):
+async def test_turn_stream_done_and_returns_pending_user_message(tmp_path):
     app = make_app(tmp_path)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
@@ -148,13 +176,15 @@ async def test_turn_stream_done_and_persists_assistant_message(tmp_path):
         assert stream.status_code == 200
         assert "event: content_delta" in stream.text
         assert "event: done" in stream.text
+        assert post.json()["message"]["role"] == "user"
+        assert post.json()["message"]["metadata"] == {"pending": True}
 
         messages = await client.get(
             f"/api/conversations/{conv}/messages",
             headers={"Authorization": f"Bearer {token}"},
         )
         roles = [item["role"] for item in messages.json()]
-        assert roles == ["user", "assistant"]
+        assert roles == []
 
 
 async def test_agent_failure_streams_error(tmp_path):

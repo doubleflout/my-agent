@@ -18,6 +18,22 @@ class SkillsLoader:
         self.workspace_skills = workspace / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
 
+    def ensure_builtin_skill_mirrors(self) -> None:
+        """Copy bundled skills into the workspace so file tools can read them."""
+        if not self.builtin_skills or not self.builtin_skills.exists():
+            return
+        self.workspace_skills.mkdir(parents=True, exist_ok=True)
+        for skill_dir in self.builtin_skills.iterdir():
+            if not skill_dir.is_dir():
+                continue
+            skill_file = skill_dir / "SKILL.md"
+            if not skill_file.exists():
+                continue
+            target = self.workspace_skills / skill_dir.name
+            if target.exists():
+                continue
+            shutil.copytree(skill_dir, target)
+
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         """列举所有技能。
 
@@ -30,6 +46,7 @@ class SkillsLoader:
         Returns:
             技能信息列表，每项包含 'name'、'path'、'source'。
         """
+        self.ensure_builtin_skill_mirrors()
         skills = []
 
         # 先扫描用户自定义技能（优先级最高）

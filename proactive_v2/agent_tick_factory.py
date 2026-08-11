@@ -58,6 +58,9 @@ class AgentTickDeps:
     turn_orchestrator: TurnOrchestrator | None = None
     pool: McpClientPool | None = None
     tool_hooks: list[ToolHook] = field(default_factory=list)
+    target_session_key: str | None = None
+    target_channel: str | None = None
+    target_chat_id: str | None = None
 
 
 class AgentTickFactory:
@@ -99,6 +102,8 @@ class AgentTickFactory:
         )
 
     def _get_session_key(self) -> str:
+        if self._deps.target_session_key:
+            return str(self._deps.target_session_key).strip()
         try:
             return self._deps.sense.target_session_key()
         except Exception:
@@ -322,8 +327,8 @@ class AgentTickFactory:
             return await orchestrator.handle_proactive_turn(
                 result=result,
                 session_key=session_key,
-                channel=str(self._deps.cfg.default_channel or "").strip(),
-                chat_id=str(self._deps.cfg.default_chat_id or "").strip(),
+                channel=str(self._deps.target_channel or self._deps.cfg.default_channel or "").strip(),
+                chat_id=str(self._deps.target_chat_id or self._deps.cfg.default_chat_id or "").strip(),
             )
 
         return send_message

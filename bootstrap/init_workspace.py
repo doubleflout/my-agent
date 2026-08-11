@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agent.config import Config
 from agent.memory import DEFAULT_SELF_MD, MemoryStore
+from agent.skills import SkillsLoader
 from bootstrap.memory import ensure_memory_plugin_storage
 from infra.persistence.json_store import save_json
 from proactive_v2.anyaction import QuotaStore
@@ -125,6 +126,18 @@ def _ensure_workspace_directories(
             summary.created.append(path)
 
 
+def _ensure_workspace_skills(
+    workspace: Path,
+    *,
+    summary: InitSummary,
+) -> None:
+    before = {path for path in (workspace / "skills").glob("*/SKILL.md")}
+    SkillsLoader(workspace).ensure_builtin_skill_mirrors()
+    after = {path for path in (workspace / "skills").glob("*/SKILL.md")}
+    for path in sorted(after - before):
+        summary.created.append(path)
+
+
 def _ensure_workspace_db_assets(
     workspace: Path,
     *,
@@ -204,6 +217,7 @@ def init_user_workspace(
     _ensure_workspace_text_assets(workspace, force=False, summary=summary)
     _ensure_workspace_json_assets(workspace, force=False, summary=summary)
     _ensure_workspace_directories(workspace, summary=summary)
+    _ensure_workspace_skills(workspace, summary=summary)
 
     if config is not None:
         _ensure_workspace_db_assets(
@@ -231,6 +245,7 @@ def init_workspace(
     _ensure_workspace_text_assets(workspace, force=force, summary=summary)
     _ensure_workspace_json_assets(workspace, force=force, summary=summary)
     _ensure_workspace_directories(workspace, summary=summary)
+    _ensure_workspace_skills(workspace, summary=summary)
     _ensure_workspace_db_assets(
         workspace,
         config=config,

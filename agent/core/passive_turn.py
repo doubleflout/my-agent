@@ -929,6 +929,10 @@ class DefaultReasoner(Reasoner):
     ) -> ReasonerResult:
         # 1. 初始化消息上下文、本轮工具轨迹。
         messages = initial_messages
+        turn_id = "passive:{}:{}".format(
+            tool_event_session_key or tool_event_channel or "unknown",
+            request_time.isoformat() if request_time is not None else id(initial_messages),
+        )
         tools_used: list[str] = []
         tools_unlocked: list[str] = []
         tool_chain: list[dict[str, Any]] = []
@@ -1096,6 +1100,7 @@ class DefaultReasoner(Reasoner):
                                 session_key=tool_event_session_key,
                                 channel=tool_event_channel,
                                 chat_id=tool_event_chat_id,
+                                turn_id=turn_id,
                                 tool_batch=tool_batch,
                                 tool_batch_index=tool_batch_index,
                             )
@@ -1253,6 +1258,7 @@ class DefaultReasoner(Reasoner):
                             session_key=tool_event_session_key,
                             channel=tool_event_channel,
                             chat_id=tool_event_chat_id,
+                            turn_id=turn_id,
                             tool_batch=tool_batch,
                             tool_batch_index=tool_batch_index,
                         ),

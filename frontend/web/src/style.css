@@ -242,6 +242,24 @@ input {
   color: #171717;
 }
 
+.proactive-entry {
+  margin: 8px 0 2px;
+  border: 1px solid #d7eeea;
+  background: #eefaf8;
+}
+
+.proactive-entry:hover {
+  background: #e1f3f0;
+}
+
+.proactive-entry.active {
+  background: #d6ebe7;
+}
+
+.proactive-entry .conversation-icon {
+  color: #0f766e;
+}
+
 .chat-main {
   min-width: 0;
   height: 100vh;

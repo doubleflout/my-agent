@@ -52,6 +52,7 @@ class CreateConversationRequest(BaseModel):
 class ConversationResponse(BaseModel):
     id: str
     title: str
+    session_key: str | None = None
     created_at: datetime
     updated_at: datetime
 

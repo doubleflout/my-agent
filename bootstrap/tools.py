@@ -281,7 +281,10 @@ def build_registered_tools(
     multimodal = getattr(config, "multimodal", True)
     vl_available = (not multimodal) and bool(getattr(config, "vl_model", ""))
     readonly_tools = build_readonly_tools(
-        http_resources, multimodal=multimodal, vl_available=vl_available
+        http_resources,
+        allowed_dir=workspace,
+        multimodal=multimodal,
+        vl_available=vl_available,
     )
     store = session_store or _build_session_store(config, workspace)
     push_tool = MessagePushTool()

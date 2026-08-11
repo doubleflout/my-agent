@@ -37,7 +37,7 @@ import "./style.css";
 
 type AuthMode = "login" | "register";
 type User = { id: string; email: string; display_name: string | null };
-type Conversation = { id: string; title: string; updated_at: string };
+type Conversation = { id: string; title: string; session_key?: string | null; updated_at: string };
 type Message = {
   id: string;
   conversation_id: string;
@@ -58,6 +58,7 @@ const App = defineComponent({
     const password = ref("");
     const displayName = ref("");
     const conversations = ref<Conversation[]>([]);
+    const proactiveConversation = ref<Conversation | null>(null);
     const activeId = ref("");
     const messages = ref<Message[]>([]);
     const draft = ref("");
@@ -69,7 +70,9 @@ const App = defineComponent({
     const messagePane = ref<HTMLElement | null>(null);
 
     const activeConversation = computed(() =>
-      conversations.value.find((item) => item.id === activeId.value),
+      proactiveConversation.value?.id === activeId.value
+        ? proactiveConversation.value
+        : conversations.value.find((item) => item.id === activeId.value),
     );
     const canSend = computed(() => Boolean(draft.value.trim() && activeId.value && !busy.value));
     const authTitle = computed(() => (mode.value === "login" ? "欢迎回来" : "创建账号"));
@@ -101,10 +104,19 @@ const App = defineComponent({
       try {
         const rows = await request<Conversation[]>("/api/conversations");
         conversations.value = rows;
-        if (!activeId.value && rows[0]) activeId.value = rows[0].id;
+        if (!activeId.value && proactiveConversation.value) {
+          activeId.value = proactiveConversation.value.id;
+        } else if (!activeId.value && rows[0]) {
+          activeId.value = rows[0].id;
+        }
       } finally {
         conversationLoading.value = false;
       }
+    }
+
+    async function refreshProactiveConversation() {
+      proactiveConversation.value = await request<Conversation>("/api/proactive/conversation");
+      if (!activeId.value) activeId.value = proactiveConversation.value.id;
     }
 
     async function loadMessages(conversationId: string) {
@@ -119,6 +131,7 @@ const App = defineComponent({
       }
       try {
         await loadMe();
+        await refreshProactiveConversation();
         await refreshConversations();
       } catch {
         localStorage.removeItem(TOKEN_KEY);
@@ -145,6 +158,7 @@ const App = defineComponent({
         token.value = res.access_token;
         localStorage.setItem(TOKEN_KEY, res.access_token);
         await loadMe();
+        await refreshProactiveConversation();
         await refreshConversations();
       } catch (err) {
         setError(err);
@@ -237,6 +251,7 @@ const App = defineComponent({
       token.value = "";
       user.value = null;
       conversations.value = [];
+      proactiveConversation.value = null;
       messages.value = [];
       activeId.value = "";
       password.value = "";
@@ -336,6 +351,19 @@ const App = defineComponent({
         }, () => [h(PlusOutlined), "新建会话"]),
         h("div", { class: "sidebar-label" }, "所有对话"),
         h(Divider),
+        proactiveConversation.value
+          ? h("button", {
+              class: [
+                "conversation-item",
+                "proactive-entry",
+                proactiveConversation.value.id === activeId.value ? "active" : "",
+              ],
+              onClick: () => (activeId.value = proactiveConversation.value?.id || ""),
+            }, [
+              h("span", { class: "conversation-icon" }, [h(RobotOutlined)]),
+              h("span", { class: "conversation-title" }, proactiveConversation.value.title || "主动推送"),
+            ])
+          : null,
         conversationLoading.value
           ? h("div", { class: "sidebar-loading" }, [h(Spin), h("span", "加载会话")])
           : h(List, {

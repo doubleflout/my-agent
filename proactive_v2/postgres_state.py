@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 def _split_session_key(session_key: str) -> tuple[str, str]:
+    parts = str(session_key or "").split(":")
+    if len(parts) >= 4 and parts[0] == "web" and parts[1] == "proactive":
+        return "web_proactive", parts[-1] or session_key
+    if len(parts) >= 3 and parts[0] == "web":
+        return "web", parts[-1] or session_key
     if ":" not in session_key:
         return "unknown", session_key
     channel, chat_id = session_key.split(":", 1)

@@ -261,6 +261,7 @@ def test_init_workspace_creates_expected_assets(tmp_path):
     ) == {"sources": []}
     assert (workspace / "proactive.db").exists()
     assert (workspace / "skills").is_dir()
+    assert (workspace / "skills" / "create-proactive-source" / "SKILL.md").exists()
     assert (workspace / "drift" / "skills").is_dir()
     assert any(path == config_path for path in summary.created)
 
