@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 from typing import Any, cast
 
 from pathlib import Path
@@ -33,6 +34,45 @@ class _FakePool:
         if (server, tool_name) in self._failures:
             raise RuntimeError(f"failed: {server}.{tool_name}")
         return self._responses[(server, tool_name)]
+
+
+def test_load_sources_reads_utf8_json(tmp_path: Path):
+    payload = {
+        "sources": [
+            {
+                "channel": "content",
+                "server": "bilibili",
+                "label": "B站健身热点",
+            }
+        ]
+    }
+    (tmp_path / "proactive_sources.json").write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    sources = mcp_sources._load_sources(tmp_path)
+
+    assert sources == payload["sources"]
+
+
+def test_get_server_cfg_reads_utf8_json(tmp_path: Path):
+    payload = {
+        "servers": {
+            "bilibili": {
+                "command": ["python", "server.py"],
+                "env": {"LABEL": "B站健身热点"},
+            }
+        }
+    }
+    (tmp_path / "mcp_servers.json").write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    cfg = mcp_sources._get_server_cfg("bilibili", tmp_path)
+
+    assert cfg == payload["servers"]["bilibili"]
 
 
 @pytest.mark.asyncio

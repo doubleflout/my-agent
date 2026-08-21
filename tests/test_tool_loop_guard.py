@@ -12,6 +12,7 @@ from agent.looping.ports import AgentLoopConfig, AgentLoopDeps, LLMConfig, Memor
 from agent.plugins.manager import PluginManager
 from agent.provider import LLMResponse, ToolCall
 from agent.subagent import SubAgent
+from agent.tool_hooks import ToolExecutionRequest, ToolExecutor
 from agent.tool_hooks.base import ToolHook
 from agent.tools.base import Tool
 from agent.tools.registry import ToolRegistry
@@ -174,6 +175,36 @@ def _tool_loop_guard_hooks() -> list[ToolHook]:
 def _install_tool_loop_guard(subagent: SubAgent) -> SubAgent:
     subagent.add_tool_hooks(_tool_loop_guard_hooks())
     return subagent
+
+
+def test_tool_loop_guard_resets_between_turn_ids() -> None:
+    executor = ToolExecutor(_tool_loop_guard_hooks())
+    calls: list[dict[str, Any]] = []
+
+    async def invoke(name: str, args: dict[str, Any]) -> str:
+        calls.append({"name": name, "args": args})
+        return "ok"
+
+    async def run_call(turn_id: str) -> str:
+        result = await executor.execute(
+            ToolExecutionRequest(
+                call_id=f"{turn_id}-{len(calls)}",
+                tool_name="dummy",
+                arguments={"x": 1},
+                source="passive",
+                session_key="web:user:conversation",
+                turn_id=turn_id,
+            ),
+            invoke,
+        )
+        return result.status
+
+    async def scenario() -> None:
+        assert await run_call("turn-a") == "success"
+        assert await run_call("turn-a") == "success"
+        assert await run_call("turn-b") == "success"
+
+    asyncio.run(scenario())
 
 
 def test_agent_loop_breaks_on_repeated_same_signature_and_returns_summary(tmp_path):

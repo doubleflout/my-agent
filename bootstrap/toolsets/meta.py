@@ -31,6 +31,7 @@ class CommonMetaToolsetProvider(ToolsetProvider):
             registry,
             self._readonly_tools,
             deps.session_store,
+            workspace=deps.workspace,
             push_tool=deps.push_tool,
         )
 
@@ -97,6 +98,7 @@ class SpawnToolsetProvider(ToolsetProvider):
 def build_readonly_tools(
     http_resources: SharedHttpResources,
     *,
+    allowed_dir: Path | None = None,
     multimodal: bool = True,
     vl_available: bool = False,
 ) -> dict[str, Tool]:
@@ -104,6 +106,7 @@ def build_readonly_tools(
         tool.name: tool
         for tool in build_readonly_research_tools(
             fetch_requester=http_resources.external_default,
+            allowed_dir=allowed_dir,
             include_list_dir=True,
             multimodal=multimodal,
             vl_available=vl_available,

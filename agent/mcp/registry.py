@@ -29,6 +29,7 @@ class McpServerRegistry:
 
     def __init__(self, config_path: Path, tool_registry: ToolRegistry) -> None:
         self._config_path = config_path
+        self._workspace = config_path.parent
         self._tool_registry = tool_registry
         self._clients: dict[str, McpClient] = {}
         self._server_tools: dict[str, list[str]] = (
@@ -118,7 +119,12 @@ class McpServerRegistry:
         env: dict[str, str] | None,
         cwd: str | None = None,
     ) -> list[str]:
-        client = McpClient(name=name, command=command, env=env, cwd=cwd)
+        client = McpClient(
+            name=name,
+            command=command,
+            env=env,
+            cwd=cwd or str(self._workspace),
+        )
         tool_infos = await client.connect()
         tool_names = []
         for info in tool_infos:

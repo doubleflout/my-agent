@@ -36,6 +36,7 @@ class MemoryPlugin:
         )
         existed = db_path.exists()
         DefaultMemoryEngine.ensure_workspace_storage(
+            config=config,
             default_config=default_config,
             workspace=workspace,
         )

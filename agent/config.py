@@ -20,10 +20,12 @@ from agent.config_models import (
     MemoryConfig,
     MemoryEmbeddingConfig,
     PeerAgentConfig,
+    PostgresStorageConfig,
     QQBotChannelConfig,
     QQBotGroupConfig,
     QQChannelConfig,
     QQGroupConfig,
+    StorageConfig,
     TelegramChannelConfig,
     WiringConfig,
 )
@@ -86,6 +88,7 @@ def load_config(path: str | Path = "config.toml") -> Config:
     channels = _load_channels_config(data)
     proactive = _load_proactive_config(data)
     memory = _load_memory_config(data)
+    storage = _load_storage_config(data)
     peer_agents = _load_peer_agents_config(data)
     fitbit = _load_fitbit_config(data)
     wiring = _load_wiring_config(data)
@@ -136,6 +139,7 @@ def load_config(path: str | Path = "config.toml") -> Config:
             llm_agent.get("base_url") or data.get("agent_base_url", "")
         ),
         memory=memory,
+        storage=storage,
         fitbit=fitbit,
         tool_search_enabled=bool(
             agent_tools.get("search_enabled", data.get("tool_search_enabled", False))
@@ -275,6 +279,26 @@ def _load_memory_config(data: dict) -> MemoryConfig:
             base_url=str(embedding.get("base_url", "")),
         ),
     )
+
+
+def _load_storage_config(data: dict) -> StorageConfig:
+    storage = _as_dict(data.get("storage"))
+    postgres_data = _as_dict(storage.get("postgres"))
+    backend = str(storage.get("backend", "sqlite") or "sqlite").strip().lower()
+    postgres = PostgresStorageConfig(
+        database_url=_resolve(str(postgres_data.get("database_url", ""))).strip(),
+        host=str(postgres_data.get("host", "localhost") or "localhost"),
+        port=int(postgres_data.get("port", 5432) or 5432),
+        database=str(postgres_data.get("database", "akashic_agent") or "akashic_agent"),
+        user=str(postgres_data.get("user", "postgres") or "postgres"),
+        password=_resolve(str(postgres_data.get("password", ""))),
+    )
+    if not postgres.database_url and postgres.password:
+        postgres.database_url = (
+            f"postgresql+psycopg://{postgres.user}:{postgres.password}"
+            f"@{postgres.host}:{postgres.port}/{postgres.database}"
+        )
+    return StorageConfig(backend=backend, postgres=postgres)
 
 
 def _load_peer_agents_config(data: dict) -> list[PeerAgentConfig]:

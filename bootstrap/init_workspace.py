@@ -6,11 +6,12 @@ from pathlib import Path
 
 from agent.config import Config
 from agent.memory import DEFAULT_SELF_MD, MemoryStore
+from agent.skills import SkillsLoader
 from bootstrap.memory import ensure_memory_plugin_storage
 from infra.persistence.json_store import save_json
 from proactive_v2.anyaction import QuotaStore
 from proactive_v2.loop import ProactiveLoop
-from proactive_v2.state import ProactiveStateStore
+from proactive_v2.state import build_proactive_state_store
 from session.store import SessionStore
 
 _EMPTY_FILES: dict[str, str] = {
@@ -125,6 +126,18 @@ def _ensure_workspace_directories(
             summary.created.append(path)
 
 
+def _ensure_workspace_skills(
+    workspace: Path,
+    *,
+    summary: InitSummary,
+) -> None:
+    before = {path for path in (workspace / "skills").glob("*/SKILL.md")}
+    SkillsLoader(workspace).ensure_builtin_skill_mirrors()
+    after = {path for path in (workspace / "skills").glob("*/SKILL.md")}
+    for path in sorted(after - before):
+        summary.created.append(path)
+
+
 def _ensure_workspace_db_assets(
     workspace: Path,
     *,
@@ -147,14 +160,28 @@ def _ensure_workspace_db_assets(
     else:
         summary.skipped.append(consolidation_db)
 
-    proactive_db = workspace / "proactive.db"
     quota_path = workspace / "proactive_quota.json"
-    proactive_exists = proactive_db.exists()
-    ProactiveStateStore(proactive_db).close()
-    if not proactive_exists:
-        summary.created.append(proactive_db)
+    storage = getattr(config, "storage", None)
+    backend = str(getattr(storage, "backend", "sqlite") or "sqlite").lower()
+    postgres = getattr(storage, "postgres", None)
+    proactive_db = workspace / "proactive.db"
+    if backend == "postgres":
+        build_proactive_state_store(
+            backend=backend,
+            workspace_dir=workspace,
+            database_url=str(getattr(postgres, "database_url", "") or ""),
+        ).close()
+        summary.notes.append("proactive state uses PostgreSQL; skipped local proactive.db")
     else:
-        summary.skipped.append(proactive_db)
+        proactive_exists = proactive_db.exists()
+        build_proactive_state_store(
+            backend=backend,
+            workspace_dir=workspace,
+        ).close()
+        if not proactive_exists:
+            summary.created.append(proactive_db)
+        else:
+            summary.skipped.append(proactive_db)
     if not quota_path.exists():
         save_json(
             quota_path,
@@ -179,6 +206,30 @@ def _ensure_workspace_db_assets(
         summary.notes.append("memory.enabled = false，未预创建语义记忆库。")
 
 
+def init_user_workspace(
+    workspace: Path,
+    *,
+    config: Config | None = None,
+) -> InitSummary:
+    """Initialize a per-user workspace without creating runtime services."""
+    summary = InitSummary()
+    workspace.mkdir(parents=True, exist_ok=True)
+    _ensure_workspace_text_assets(workspace, force=False, summary=summary)
+    _ensure_workspace_json_assets(workspace, force=False, summary=summary)
+    _ensure_workspace_directories(workspace, summary=summary)
+    _ensure_workspace_skills(workspace, summary=summary)
+
+    if config is not None:
+        _ensure_workspace_db_assets(
+            workspace,
+            config=config,
+            summary=summary,
+        )
+
+    summary.notes.append(f"User workspace initialized: {workspace}")
+    return summary
+
+
 def init_workspace(
     *,
     config_path: str | Path = "config.toml",
@@ -194,6 +245,7 @@ def init_workspace(
     _ensure_workspace_text_assets(workspace, force=force, summary=summary)
     _ensure_workspace_json_assets(workspace, force=force, summary=summary)
     _ensure_workspace_directories(workspace, summary=summary)
+    _ensure_workspace_skills(workspace, summary=summary)
     _ensure_workspace_db_assets(
         workspace,
         config=config,

@@ -678,6 +678,7 @@ async def test_mcp_registry_anyaction_and_sampler_cover_core_paths(
     )
     act, meta = gate.should_act(now_utc=now, last_user_at=now - timedelta(hours=2))
     assert act is False
+
     assert meta["reason"] == "quota_exhausted"
 
     cfg.anyaction_daily_max_actions = 3
@@ -700,6 +701,42 @@ async def test_mcp_registry_anyaction_and_sampler_cover_core_paths(
     sampled = sample_memory_chunks(text, 2, rng=__import__("random").Random(1))
     assert len(sampled) == 2
     assert sample_memory_chunks("", 2) == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_registry_defaults_cwd_to_config_workspace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    class _Client:
+        def __init__(self, name: str, command: list[str], env=None, cwd=None):
+            self.name = name
+            self.command = command
+            self.env = env
+            self.cwd = cwd
+
+        async def connect(self):
+            return [SimpleNamespace(name="mcp_tool", description="Read remote docs")]
+
+        async def disconnect(self):
+            return None
+
+    class _Wrapper:
+        def __init__(self, client, info):
+            self.client = client
+            self.info = info
+            self.name = f"{client.name}:{info.name}"
+            self.description = info.description
+            self.parameters = {"type": "object", "properties": {}, "required": []}
+
+    monkeypatch.setattr("agent.mcp.registry.McpClient", _Client)
+    monkeypatch.setattr("agent.mcp.registry.McpToolWrapper", _Wrapper)
+    tools = MagicMock()
+    registry = McpServerRegistry(tmp_path / "mcp_servers.json", tools)
+
+    await registry.add("docs", ["python", "srv.py"])
+
+    client = registry._clients["docs"]
+    assert client.cwd == str(tmp_path)
 
 
 @pytest.mark.asyncio

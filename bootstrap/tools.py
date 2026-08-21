@@ -281,9 +281,12 @@ def build_registered_tools(
     multimodal = getattr(config, "multimodal", True)
     vl_available = (not multimodal) and bool(getattr(config, "vl_model", ""))
     readonly_tools = build_readonly_tools(
-        http_resources, multimodal=multimodal, vl_available=vl_available
+        http_resources,
+        allowed_dir=workspace,
+        multimodal=multimodal,
+        vl_available=vl_available,
     )
-    store = session_store or SessionStore(workspace / "sessions.db")
+    store = session_store or _build_session_store(config, workspace)
     push_tool = MessagePushTool()
     memory_result = resolve_memory_toolset_provider(wiring.memory).register(
         tools,
@@ -440,7 +443,7 @@ def build_core_runtime(
     # provider (llm.main) is used for consolidation event extraction.
     loop_provider = agent_provider or provider
     loop_model = config.agent_model or config.model
-    session_manager = SessionManager(workspace)
+    session_manager = SessionManager(workspace, store=_build_session_store(config, workspace))
     loop_ref: dict[str, AgentLoop] = {}
     tools, push_tool, scheduler, mcp_registry, memory_runtime, peer_pm, peer_poller = (
         build_registered_tools(
@@ -497,6 +500,7 @@ def build_core_runtime(
     from agent.plugins.manager import PluginManager as _PluginManager
     plugin_manager = _PluginManager(
         plugin_dirs=_resolve_plugin_dirs(workspace),
+        app_config=config,
         event_bus=event_bus,
         tool_registry=tools,
         workspace=workspace,
@@ -524,6 +528,22 @@ def build_core_runtime(
         peer_poller=peer_poller,
         plugin_manager=plugin_manager,
     )
+
+
+def _build_session_store(config: Config, workspace: Path):
+    from session.store import SessionStore
+
+    storage = getattr(config, "storage", None)
+    backend = str(getattr(storage, "backend", "sqlite") or "sqlite").lower()
+    if backend == "postgres":
+        from session.postgres_store import PostgresSessionStore
+
+        postgres = getattr(storage, "postgres", None)
+        database_url = str(getattr(postgres, "database_url", "") or "").strip()
+        if not database_url:
+            raise RuntimeError("storage.backend=postgres but storage.postgres.database_url is empty")
+        return PostgresSessionStore(database_url)
+    return SessionStore(workspace / "sessions.db")
 
 
 def _resolve_plugin_dirs(workspace: Path) -> list[Path]:

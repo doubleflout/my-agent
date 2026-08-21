@@ -20,6 +20,7 @@ from bootstrap.dashboard_api import run_dashboard_api
 from bootstrap.init_workspace import InitSummary, init_workspace
 from bootstrap.memory import build_memory_admin_runtime
 from bootstrap.providers import build_providers
+from bootstrap.web_server import run_web_chat_server
 from core.net.http import SharedHttpResources
 
 
@@ -209,6 +210,18 @@ if __name__ == "__main__":
             )
         finally:
             asyncio.run(memory_runtime.aclose())
+        sys.exit(0)
+
+    if args and args[0] == "web":
+        config = Config.load(config_path)
+        asyncio.run(
+            run_web_chat_server(
+                config=config,
+                workspace=workspace or _default_workspace(),
+                host=dashboard_host,
+                port=dashboard_port,
+            )
+        )
         sys.exit(0)
 
     if not Path(config_path).exists():

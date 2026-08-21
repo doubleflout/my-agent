@@ -14,6 +14,10 @@ import logging
 from pathlib import Path
 
 from .db import open_db
+try:
+    import psycopg
+except ImportError:  # pragma: no cover
+    psycopg = None  # type: ignore[assignment]
 
 logger = logging.getLogger("observe.retention")
 
@@ -38,17 +42,26 @@ def _should_run(db_path: Path) -> bool:
     return age_hours >= 24
 
 
-def _run_cleanup(db_path: Path) -> None:
-    conn = open_db(db_path)
+def _run_cleanup(db_path: Path, database_url: str | None = None) -> None:
+    conn = _open_cleanup_db(db_path, database_url)
     try:
         deleted: dict[str, int] = {}
-        with conn:
+        if _is_postgres_conn(conn):
             for table, days in _RETENTION_DAYS.items():
-                cutoff = f"datetime('now', '-{days} days')"
                 cur = conn.execute(
-                    f"DELETE FROM {table} WHERE ts < {cutoff} AND error IS NULL"
+                    f"DELETE FROM {table} WHERE ts < now() - (%s * interval '1 day') AND error IS NULL",
+                    (days,),
                 )
                 deleted[table] = cur.rowcount
+            conn.commit()
+        else:
+            with conn:
+                for table, days in _RETENTION_DAYS.items():
+                    cutoff = f"datetime('now', '-{days} days')"
+                    cur = conn.execute(
+                        f"DELETE FROM {table} WHERE ts < {cutoff} AND error IS NULL"
+                    )
+                    deleted[table] = cur.rowcount
 
         logger.info("observe retention done: %s", deleted)
         _ = _stamp_path(db_path).write_text("ok")
@@ -58,11 +71,25 @@ def _run_cleanup(db_path: Path) -> None:
         conn.close()
 
 
-async def run_retention_if_needed(db_path: Path) -> None:
+def _open_cleanup_db(db_path: Path, database_url: str | None) -> object:
+    if database_url:
+        if psycopg is None:
+            raise RuntimeError("psycopg is required for postgres observe retention")
+        return psycopg.connect(database_url)
+    return open_db(db_path)
+
+
+def _is_postgres_conn(conn: object) -> bool:
+    if psycopg is None:
+        return False
+    return isinstance(conn, psycopg.Connection)
+
+
+async def run_retention_if_needed(db_path: Path, *, database_url: str | None = None) -> None:
     """在 asyncio 后台跑清理（用 run_in_executor 避免阻塞事件循环）。"""
     if not db_path.exists():
         return
     if not _should_run(db_path):
         return
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _run_cleanup, db_path)
+    await loop.run_in_executor(None, _run_cleanup, db_path, database_url)

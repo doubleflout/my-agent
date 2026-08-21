@@ -23,6 +23,26 @@ def _dedupe_source_key(source_key: str) -> str:
     return ":".join(parts[:2])
 
 
+def build_proactive_state_store(
+    *,
+    backend: str,
+    workspace_dir: Path,
+    database_url: str = "",
+):
+    if str(backend or "sqlite").lower() == "postgres":
+        if not str(database_url or "").strip():
+            raise RuntimeError(
+                "storage.backend=postgres but storage.postgres.database_url is empty"
+            )
+        from proactive_v2.postgres_state import PostgresProactiveStateStore
+
+        return PostgresProactiveStateStore(
+            str(database_url).strip(),
+            workspace_dir=workspace_dir,
+        )
+    return ProactiveStateStore(workspace_dir / "proactive.db")
+
+
 class ProactiveStateStore:
     def __init__(self, db_path: Path) -> None:
         self.db_path = Path(db_path)

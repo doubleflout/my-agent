@@ -141,6 +141,7 @@ class DriftRunner:
                     arguments=tool_args,
                     source="proactive",
                     session_key=ctx.session_key,
+                    turn_id=f"{ctx.tick_id}:drift",
                 ),
                 exec_fn,
             )

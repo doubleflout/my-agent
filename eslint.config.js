@@ -26,4 +26,14 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "error",
     },
   },
+  {
+    files: ["frontend/web/src/**/*.ts"],
+    languageOptions: {
+      ecmaVersion: 2021,
+      globals: globals.browser,
+    },
+    rules: {
+      "@typescript-eslint/no-explicit-any": "error",
+    },
+  },
 );

@@ -64,6 +64,9 @@ class ToolLoopGuard(Plugin):
         )
 
     def _state_key(self, event: PreToolCtx) -> str:
+        turn_id = str(getattr(event, "turn_id", "") or "").strip()
+        if turn_id:
+            return f"{event.source}:{event.session_key}:{turn_id}"
         if event.session_key:
             return f"{event.source}:{event.session_key}"
         return f"{event.source}:{event.channel}:{event.chat_id}"

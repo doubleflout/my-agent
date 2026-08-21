@@ -31,13 +31,20 @@ class ObservePlugin(Plugin):
             logger.warning("observe 插件缺少 workspace，跳过加载")
             return
 
-        self._writer = TraceWriter(workspace / "observe" / "observe.db")
+        database_url = _observe_database_url(self.context)
+        self._writer = TraceWriter(
+            workspace / "observe" / "observe.db",
+            database_url=database_url,
+        )
         self._writer_task = asyncio.create_task(
             self._writer.run(),
             name="observe_writer",
         )
         self._retention_task = asyncio.create_task(
-            run_retention_if_needed(workspace / "observe" / "observe.db"),
+            run_retention_if_needed(
+                workspace / "observe" / "observe.db",
+                database_url=database_url,
+            ),
             name="observe_retention",
         )
         self.context.event_bus.on(TurnCommitted, self._observe_turn_committed)
@@ -208,3 +215,14 @@ def _group_calls(group: dict[str, object]) -> list[dict[str, object]]:
                 }
             )
     return out
+
+
+def _observe_database_url(context: object) -> str | None:
+    app_config = getattr(context, "app_config", None)
+    storage = getattr(app_config, "storage", None)
+    backend = str(getattr(storage, "backend", "") or "").strip().lower()
+    if backend != "postgres":
+        return None
+    postgres = getattr(storage, "postgres", None)
+    database_url = str(getattr(postgres, "database_url", "") or "").strip()
+    return database_url or None

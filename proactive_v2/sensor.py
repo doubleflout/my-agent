@@ -38,6 +38,7 @@ class Sensor:
         presence: PresenceStore | None,
         rng: Any,
         fitbit: Any | None = None,
+        target_session_key: str | None = None,
     ) -> None:
         self._cfg = cfg
         self._sessions = sessions
@@ -46,6 +47,7 @@ class Sensor:
         self._presence = presence
         self._rng = rng
         self._fitbit = fitbit
+        self._target_session_key = str(target_session_key or "").strip()
 
     def sleep_context(self) -> Any:
         if self._fitbit is None:
@@ -64,6 +66,8 @@ class Sensor:
             return False
 
     def target_session_key(self) -> str:
+        if self._target_session_key:
+            return self._target_session_key
         channel = (self._cfg.default_channel or "").strip()
         chat_id = self._cfg.default_chat_id.strip()
         return f"{channel}:{chat_id}" if channel and chat_id else ""

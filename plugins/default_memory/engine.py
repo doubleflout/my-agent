@@ -39,6 +39,7 @@ from core.net.http import SharedHttpResources
 from memory2.embedder import Embedder
 from memory2.memorizer import Memorizer
 from memory2.post_response_worker import PostResponseMemoryWorker
+from memory2.postgres_store import PostgresMemoryStore, resolve_memory_user_id
 from memory2.procedure_tagger import ProcedureTagger
 from memory2.query_builder import build_procedure_queries
 from memory2.retriever import Retriever
@@ -464,9 +465,33 @@ class DefaultMemoryEngine:
             workspace=workspace,
             default_config=default_config,
         )
+        storage_backend = str(getattr(config.storage, "backend", "sqlite") or "sqlite").strip().lower()
+        postgres = getattr(config.storage, "postgres", None)
+        database_url = str(getattr(postgres, "database_url", "") or "").strip()
+        proactive_target = getattr(config.proactive, "target", None)
+        proactive_session_key = ""
+        if proactive_target is not None:
+            proactive_channel = str(getattr(proactive_target, "channel", "") or "").strip()
+            proactive_chat_id = str(getattr(proactive_target, "chat_id", "") or "").strip()
+            if proactive_channel and proactive_chat_id:
+                proactive_session_key = f"{proactive_channel}:{proactive_chat_id}"
         embedding = config.memory.embedding
         retrieval = default_config.retrieval
-        self._v2_store = MemoryStore2(db_path)
+        if storage_backend == "postgres":
+            if not database_url:
+                raise RuntimeError("storage.backend=postgres but storage.postgres.database_url is empty")
+            memory_user_id = resolve_memory_user_id(
+                workspace=workspace,
+                database_url=database_url,
+                proactive_session_key=proactive_session_key,
+            )
+            self._v2_store = PostgresMemoryStore(
+                database_url,
+                workspace=workspace,
+                user_id=memory_user_id,
+            )
+        else:
+            self._v2_store = MemoryStore2(db_path)
         self._embedder = Embedder(
             base_url=embedding.base_url
             or config.light_base_url
@@ -521,13 +546,35 @@ class DefaultMemoryEngine:
     def ensure_workspace_storage(
         cls,
         *,
+        config: Config,
         default_config: DefaultMemoryConfig,
         workspace: Path,
     ) -> None:
-        db_path = resolve_memory_db_path(
-            workspace=workspace,
-            default_config=default_config,
-        )
+        storage_backend = str(getattr(config.storage, "backend", "sqlite") or "sqlite").strip().lower()
+        if storage_backend == "postgres":
+            postgres = getattr(config.storage, "postgres", None)
+            database_url = str(getattr(postgres, "database_url", "") or "").strip()
+            if not database_url:
+                raise RuntimeError("storage.backend=postgres but storage.postgres.database_url is empty")
+            proactive_target = getattr(config.proactive, "target", None)
+            proactive_session_key = ""
+            if proactive_target is not None:
+                proactive_channel = str(getattr(proactive_target, "channel", "") or "").strip()
+                proactive_chat_id = str(getattr(proactive_target, "chat_id", "") or "").strip()
+                if proactive_channel and proactive_chat_id:
+                    proactive_session_key = f"{proactive_channel}:{proactive_chat_id}"
+            store = PostgresMemoryStore(
+                database_url,
+                workspace=workspace,
+                user_id=resolve_memory_user_id(
+                    workspace=workspace,
+                    database_url=database_url,
+                    proactive_session_key=proactive_session_key,
+                ),
+            )
+            store.close()
+            return
+        db_path = resolve_memory_db_path(workspace=workspace, default_config=default_config)
         store = MemoryStore2(db_path)
         store.close()
 

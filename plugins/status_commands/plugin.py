@@ -5,8 +5,13 @@ import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from zoneinfo import ZoneInfo
+
+try:
+    import psycopg
+except ImportError:  # pragma: no cover
+    psycopg = None  # type: ignore[assignment]
 
 from agent.lifecycle.types import BeforeTurnCtx, TurnState
 from agent.plugins import Plugin
@@ -33,11 +38,7 @@ class MemoryStatusCommandModule:
             return frame
         state = frame.input
         command = _normalize_command(state.msg.content)
-        if command not in {
-            "/memorystatus",
-            "/memory_status",
-            "/compact_status",
-        }:
+        if command not in {"/memorystatus", "/memory_status", "/compact_status"}:
             return frame
         session = state.session
         if session is None:
@@ -46,7 +47,7 @@ class MemoryStatusCommandModule:
         last = max(0, int(getattr(session, "last_consolidated", 0)))
         last = min(last, len(messages))
         logger.info(
-            "[%s:%s] 命中命令: %s",
+            "[%s:%s] hit command: %s",
             self._plugin_name,
             self.__class__.__name__,
             command,
@@ -62,9 +63,16 @@ class KVCacheCommandModule:
     requires = ("before_turn.acquire_session", _SESSION_SLOT)
     produces = (_CTX_SLOT,)
 
-    def __init__(self, plugin_name: str, db_path: Path | None) -> None:
+    def __init__(
+        self,
+        plugin_name: str,
+        db_path: Path | None,
+        *,
+        database_url: str | None = None,
+    ) -> None:
         self._plugin_name = plugin_name
         self._db_path = db_path
+        self._database_url = (database_url or "").strip() or None
 
     async def run(self, frame) -> object:
         if _CTX_SLOT in frame.slots:
@@ -74,7 +82,7 @@ class KVCacheCommandModule:
         if command not in {"/kvcache", "/cache_status"}:
             return frame
         logger.info(
-            "[%s:%s] 命中命令: %s",
+            "[%s:%s] hit command: %s",
             self._plugin_name,
             self.__class__.__name__,
             command,
@@ -85,8 +93,8 @@ class KVCacheCommandModule:
 
     def _build_reply(self, state: TurnState) -> str:
         db_path = self._db_path
-        if not db_path or not db_path.exists():
-            return "暂无 KVCache 数据（observe 数据库不存在）。"
+        if not self._database_url and (db_path is None or not db_path.exists()):
+            return "No KVCache data yet (observe database not found)."
 
         args = (state.msg.content or "").strip().split()
         limit = 5
@@ -97,51 +105,82 @@ class KVCacheCommandModule:
                 pass
 
         try:
-            conn = sqlite3.connect(str(db_path))
-            try:
-                cursor = conn.execute(
-                    """SELECT llm_output, ts, react_cache_prompt_tokens, react_cache_hit_tokens
-                       FROM turns WHERE session_key=? AND source='agent'
-                       ORDER BY id DESC LIMIT ?""",
-                    [state.session_key, limit],
-                )
-                rows = cursor.fetchall()
-            finally:
-                conn.close()
+            rows = self._load_rows(state.session_key, limit, db_path)
         except Exception:
-            logger.exception("KVCache 查询失败")
-            return "KVCache 查询失败。"
+            logger.exception("KVCache query failed")
+            return "KVCache query failed."
 
         if not rows:
-            return "暂无 KVCache 数据。"
+            return "No KVCache data yet."
 
-        overall_prompt = sum(r[2] or 0 for r in rows)
-        overall_hit = sum(r[3] or 0 for r in rows)
+        overall_prompt = sum(int(_row_values(r)[2] or 0) for r in rows)
+        overall_hit = sum(int(_row_values(r)[3] or 0) for r in rows)
         overall_pct = (overall_hit / overall_prompt * 100) if overall_prompt > 0 else 0.0
 
         lines = [
-            f"⚡ KVCache · 最近 {len(rows)} 轮",
+            f"KVCache recent {len(rows)} turns",
             "",
-            f"命中率  {overall_pct:.1f}%  {_pct_bar(overall_pct)}",
+            f"Hit rate {overall_pct:.1f}%  {_pct_bar(overall_pct)}",
             f"Token  {overall_hit:,} / {overall_prompt:,}",
         ]
         for row in rows:
-            llm_output, ts, prompt_tokens, hit_tokens = row
+            llm_output, ts, prompt_tokens, hit_tokens = _row_values(row)
             content = _content_to_text(llm_output or "")
             if is_context_frame(content):
                 content = ""
             preview = _preview_text(content, limit=72)
-            hit = hit_tokens or 0
-            prompt = prompt_tokens or 0
+            hit = int(hit_tokens or 0)
+            prompt = int(prompt_tokens or 0)
             pct = (hit / prompt * 100) if prompt > 0 else 0.0
             lines.extend(["", ""])
             lines.append(
-                f"{_format_ts(ts)}   {_pct_emoji(pct)} {pct:.1f}%  {_pct_bar(pct)}"
+                f"{_format_ts(str(ts))}   {_pct_emoji(pct)} {pct:.1f}%  {_pct_bar(pct)}"
             )
             lines.append(f"    {hit:,} / {prompt:,} tokens")
             if preview:
                 lines.append(f"    {preview}")
         return "\n".join(lines)
+
+    def _load_rows(
+        self,
+        session_key: str,
+        limit: int,
+        db_path: Path | None,
+    ) -> list[object]:
+        if self._database_url:
+            if psycopg is None:
+                raise RuntimeError("psycopg is required for postgres status_commands")
+            with psycopg.connect(self._database_url) as conn:
+                return list(
+                    conn.execute(
+                        """
+                        SELECT llm_output, ts, react_cache_prompt_tokens, react_cache_hit_tokens
+                        FROM turns
+                        WHERE session_key=%s AND source='agent'
+                        ORDER BY id DESC
+                        LIMIT %s
+                        """,
+                        [session_key, limit],
+                    ).fetchall()
+                )
+        if db_path is None:
+            return []
+        conn = sqlite3.connect(str(db_path))
+        try:
+            return list(
+                conn.execute(
+                    """
+                    SELECT llm_output, ts, react_cache_prompt_tokens, react_cache_hit_tokens
+                    FROM turns
+                    WHERE session_key=? AND source='agent'
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    [session_key, limit],
+                ).fetchall()
+            )
+        finally:
+            conn.close()
 
 
 class StatusCommands(Plugin):
@@ -149,20 +188,27 @@ class StatusCommands(Plugin):
 
     def telegram_bot_commands(self) -> list[tuple[str, str]]:
         return [
-            ("memorystatus", "查看记忆整理状态"),
-            ("kvcache", "查看 KVCache 状态"),
+            ("memorystatus", "Show memory consolidation status"),
+            ("kvcache", "Show KVCache status"),
         ]
 
     def before_turn_modules(self) -> list[object]:
         plugin_name = self.name or "status_commands"
         db_path = None
+        database_url = None
         if self.context.workspace is not None:
             db_path = self.context.workspace / "observe" / "observe.db"
+        app_config = getattr(self.context, "app_config", None)
+        storage = getattr(app_config, "storage", None)
+        backend = str(getattr(storage, "backend", "") or "").strip().lower()
+        if backend == "postgres":
+            postgres = getattr(storage, "postgres", None)
+            database_url = str(getattr(postgres, "database_url", "") or "").strip() or None
         return cast(
             "list[object]",
             [
                 MemoryStatusCommandModule(plugin_name),
-                KVCacheCommandModule(plugin_name, db_path),
+                KVCacheCommandModule(plugin_name, db_path, database_url=database_url),
             ],
         )
 
@@ -201,9 +247,9 @@ def _format_ts(ts: str) -> str:
         return f"{parsed.month}-{parsed.day} {parsed.hour:02d}:{parsed.minute:02d}"
     except ValueError:
         pass
-    m = _TS_PATTERN.search(ts)
-    if m:
-        return f"{int(m.group(2))}-{int(m.group(3))} {m.group(4)}:{m.group(5)}"
+    match = _TS_PATTERN.search(ts)
+    if match:
+        return f"{int(match.group(2))}-{int(match.group(3))} {match.group(4)}:{match.group(5)}"
     return ts
 
 
@@ -213,20 +259,20 @@ def _format_memory_status_reply(messages: list[dict], last_consolidated: int) ->
     pending_user = max(0, total_user - consolidated_user)
     last_user_message = _latest_real_user_content(messages[:last_consolidated])
 
-    lines = ["🧠 记忆整理状态："]
+    lines = ["Memory consolidation status:"]
     if last_consolidated <= 0 or not last_user_message:
-        lines.append("当前会话还没有完成过记忆整理。")
+        lines.append("This session has not completed a memory consolidation yet.")
     elif pending_user == 0:
-        lines.append("当前会话已经整理到最新的用户消息。")
+        lines.append("This session is already consolidated up to the latest user message.")
     else:
-        lines.append(f"上次整理到 {pending_user} 条用户消息之前。")
+        lines.append(f"Last consolidation was before the most recent {pending_user} user messages.")
     if last_user_message:
-        lines.extend(["", "最后已整理的用户消息：", f"“{_preview_text(last_user_message)}”"])
+        lines.extend(["", "Last consolidated user message:", f"\"{_preview_text(last_user_message)}\""])
     lines.extend(
         [
             "",
-            f"尚未整理的用户消息数：{pending_user}",
-            f"当前会话消息数：{len(messages)}",
+            f"Pending user messages: {pending_user}",
+            f"Current session messages: {len(messages)}",
         ]
     )
     return "\n".join(lines)
@@ -266,18 +312,24 @@ def _preview_text(text: str, limit: int = 80) -> str:
     normalized = " ".join(text.split())
     if len(normalized) <= limit:
         return normalized
-    return normalized[: limit - 1] + "…"
+    return normalized[: limit - 3].rstrip() + "..."
 
 
 def _pct_bar(pct: float, width: int = 10) -> str:
     filled = round(pct / 100 * width)
     filled = max(0, min(width, filled))
-    return "█" * filled + "░" * (width - filled)
+    return "#" * filled + "-" * (width - filled)
 
 
 def _pct_emoji(pct: float) -> str:
     if pct >= 80:
-        return "🟢"
+        return "HIGH"
     if pct >= 40:
-        return "🟡"
-    return "🔴"
+        return "MID"
+    return "LOW"
+
+
+def _row_values(row: object) -> tuple[Any, Any, Any, Any]:
+    if hasattr(row, "__getitem__"):
+        return row[0], row[1], row[2], row[3]
+    raise TypeError(f"unsupported kvcache row type: {type(row)!r}")

@@ -69,6 +69,11 @@ def build_compose_prompt_messages(
 6. 若「用户偏好记录」中有明确写明不要推送/直接过滤/主动屏蔽，而候选内容正好命中该规则，必须输出 `{no_content_token}`。"""
     else:
         # 传统模式（保持向后兼容）
+        pref_section = (
+            f"## 用户偏好记录（仅用于选题，不得用于编造内容）\n{preference_block}\n"
+            if preference_block
+            else ""
+        )
         system_msg = (
             "你是用户的主动助手。负责把今天的真实新内容提炼成一条值得发送、又自然像人说出来的消息。\n"
             "## 身份（与主循环一致）\n"
@@ -96,7 +101,7 @@ def build_compose_prompt_messages(
 
 ## 用户最近聊过的话题（仅供了解上下文）
 {prompt_context.chat_text}
-{f"## 用户偏好记录（仅用于选题，不得用于编造内容）\n{preference_block}\n" if preference_block else ""}任务：
+{pref_section}任务：
 1. 从「今天的新内容」中选出最值得推送的一条或一组，先写一句自然开场。
 2. 再用 1 到 2 句提炼最值得看的信息点，所有事实都必须来自上面的新内容，不得脑补。
 3. 不要只把标题重复一遍；要尽量提炼"这条里真正值得用户点开的点"。
@@ -116,6 +121,11 @@ def build_post_judge_prompt_messages(
     composed_message: str,
     preference_block: str = "",
 ) -> tuple[str, str]:
+    pref_section = (
+        f"用户偏好与禁推规则：\n{preference_block}\n\n"
+        if preference_block
+        else ""
+    )
     system_msg = (
         "你是主动消息评分器。"
         "仅对信息价值维度打分，不要做发送结论。"
@@ -127,7 +137,7 @@ def build_post_judge_prompt_messages(
 用户已收到的最近几条推送：
 {last_proactive}
 
-{f"用户偏好与禁推规则：\n{preference_block}\n\n" if preference_block else ""}
+{pref_section}
 
 待发送消息：
 {composed_message}
