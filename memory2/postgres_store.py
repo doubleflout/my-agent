@@ -186,9 +186,7 @@ class PostgresMemoryStore:
             """
             INSERT INTO users(id, email, password_hash, display_name)
             VALUES (%s, %s, %s, %s)
-            ON CONFLICT(id) DO UPDATE SET
-                email = excluded.email,
-                display_name = COALESCE(users.display_name, excluded.display_name)
+            ON CONFLICT(id) DO NOTHING
             """,
             (self.user_id, email, "external:memory2-postgres", display_name),
         )

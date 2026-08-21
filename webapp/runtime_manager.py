@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import random as _random_module
 import time
@@ -13,6 +14,8 @@ from agent.config_models import Config
 from agent.looping.ports import SessionServices
 from agent.turns.orchestrator import TurnOrchestrator, TurnOrchestratorDeps
 from agent.turns.outbound import OutboundDispatch, OutboundPort
+from bus.message_queue import MessageQueueBackend
+from bus.message_queue_types import QueueEnvelope
 from bootstrap.tools import CoreRuntime, build_core_runtime
 from core.net.http import SharedHttpResources
 from proactive_v2.agent_tick_factory import AgentTickDeps, AgentTickFactory
@@ -24,6 +27,8 @@ from proactive_v2.state import build_proactive_state_store
 from webapp.agent_executor import AgentExecutor, web_session_key
 from webapp.proactive_scheduler import WebProactiveJob
 from webapp.store import WebStore
+
+logger = logging.getLogger(__name__)
 
 
 class UserWorkspaceResolver:
@@ -143,9 +148,15 @@ class UserRuntimeAgentExecutor(AgentExecutor):
 
 
 class UserRuntimeProactiveRunner:
-    def __init__(self, runtime_manager: UserRuntimeManager, store: WebStore) -> None:
+    def __init__(
+        self,
+        runtime_manager: UserRuntimeManager,
+        store: WebStore,
+        message_queue: MessageQueueBackend | None = None,
+    ) -> None:
         self.runtime_manager = runtime_manager
         self.store = store
+        self.message_queue = message_queue
 
     async def run(self, job: WebProactiveJob) -> str | None:
         runtime = await self.runtime_manager.get_runtime(job.user_id)
@@ -197,6 +208,7 @@ class UserRuntimeProactiveRunner:
                         user_id=job.user_id,
                         conversation_id=job.conversation_id,
                         session_key=job.session_key,
+                        message_queue=self.message_queue,
                     ),
                 )
             )
@@ -242,11 +254,13 @@ class _WebProactiveOutboundPort(OutboundPort):
         user_id: str,
         conversation_id: str,
         session_key: str,
+        message_queue: MessageQueueBackend | None = None,
     ) -> None:
         self._store = store
         self._user_id = user_id
         self._conversation_id = conversation_id
         self._session_key = session_key
+        self._message_queue = message_queue
 
     async def dispatch(self, outbound: OutboundDispatch) -> bool:
         content = str(outbound.content or "").strip()
@@ -267,6 +281,31 @@ class _WebProactiveOutboundPort(OutboundPort):
             content=content,
             metadata=metadata,
         )
+        logger.info(
+            "[web.proactive] persisted proactive message user=%s conversation=%s session=%s content_len=%d media=%d",
+            self._user_id,
+            self._conversation_id,
+            self._session_key,
+            len(content),
+            len(media),
+        )
+        if self._message_queue is not None:
+            await self._message_queue.publish(
+                QueueEnvelope.new(
+                    topic="agent.outbound",
+                    event_type="proactive_push",
+                    user_id=self._user_id,
+                    session_key=self._session_key,
+                    conversation_id=self._conversation_id,
+                    source="proactive",
+                    payload={
+                        "role": "assistant",
+                        "content": content,
+                        "media": media,
+                    },
+                    metadata=metadata,
+                )
+            )
         return True
 
 

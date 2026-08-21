@@ -32,6 +32,11 @@ def _jsonb(value: Any) -> Jsonb:
 
 
 def _split_session_key(session_key: str) -> tuple[str, str]:
+    parts = session_key.split(":")
+    if len(parts) >= 4 and parts[0] == "web" and parts[1] == "proactive":
+        return "web_proactive", parts[3]
+    if len(parts) >= 3 and parts[0] == "web":
+        return "web", parts[2]
     if ":" not in session_key:
         return "unknown", session_key
     channel, chat_id = session_key.split(":", 1)
@@ -39,8 +44,10 @@ def _split_session_key(session_key: str) -> tuple[str, str]:
 
 
 def _web_user_id_from_session_key(session_key: str) -> str | None:
-    parts = session_key.split(":", 2)
-    if len(parts) == 3 and parts[0] == "web" and parts[1]:
+    parts = session_key.split(":")
+    if len(parts) >= 4 and parts[0] == "web" and parts[1] == "proactive" and parts[2]:
+        return parts[2]
+    if len(parts) >= 3 and parts[0] == "web" and parts[1]:
         return parts[1]
     return None
 

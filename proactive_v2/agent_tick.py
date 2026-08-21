@@ -36,7 +36,13 @@ from proactive_v2.contracts import (
 from proactive_v2.context import AgentTickContext
 from proactive_v2.drift_runner import DriftRunner
 from proactive_v2.gateway import DataGateway, GatewayDeps, GatewayResult
-from proactive_v2.tools import TOOL_SCHEMAS, ToolDeps, dispatch, execute
+from proactive_v2.tools import (
+    TERMINAL_TOOL_SCHEMAS,
+    TOOL_SCHEMAS,
+    ToolDeps,
+    dispatch,
+    execute,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -717,17 +723,20 @@ class AgentTick:
         # 4. 主 loop：每轮允许模型自行决定是否调用工具。
         #    直到 finish_turn 写入 terminal_action，或达到步数上限。
         while ctx.steps_taken < self._cfg.agent_tick_max_steps:
+            terminal_only = ctx.terminal_action is None and bool(ctx.draft_message.strip())
             ok = await self._run_tool_step(
                 messages,
                 ctx,
                 loop_tag="loop",
-                tool_choice="auto",
+                tool_choice="required" if terminal_only else "auto",
+                schemas=TERMINAL_TOOL_SCHEMAS if terminal_only else None,
             )
             if not ok:
                 break
 
             if ctx.terminal_action is not None:
                 break
+        self._commit_draft_if_needed(ctx)
 
         # ── Classification completeness check ─────────────────────────────
         # 若 agent 已 finish_skip 但仍有未分类 content 条目，重置并强制补完。
@@ -760,13 +769,17 @@ class AgentTick:
                 for _ in range(5):
                     if ctx.terminal_action is not None or ctx.steps_taken >= self._cfg.agent_tick_max_steps:
                         break
+                    terminal_only = bool(ctx.draft_message.strip())
                     ok = await self._run_tool_step(
                         messages,
                         ctx,
                         loop_tag="complete",
+                        tool_choice="required" if terminal_only else "auto",
+                        schemas=TERMINAL_TOOL_SCHEMAS if terminal_only else None,
                     )
                     if not ok:
                         break
+                self._commit_draft_if_needed(ctx)
 
         # ── Reflection pass ───────────────────────────────────────────────
         # 5. 若 agent 已经把 interesting 标好了，但还没 finish_turn，
@@ -783,17 +796,33 @@ class AgentTick:
             for _ in range(3):
                 if ctx.terminal_action is not None or ctx.steps_taken >= self._cfg.agent_tick_max_steps:
                     break
+                terminal_only = bool(ctx.draft_message.strip())
                 ok = await self._run_tool_step(
                     messages,
                     ctx,
                     loop_tag="reflect",
-                    tool_choice="auto",
+                    tool_choice="required" if terminal_only else "auto",
+                    schemas=TERMINAL_TOOL_SCHEMAS if terminal_only else None,
                 )
                 if not ok:
                     break
+            self._commit_draft_if_needed(ctx)
 
         self.last_ctx = ctx
         return ctx.terminal_action == "reply"
+
+    @staticmethod
+    def _commit_draft_if_needed(ctx: AgentTickContext) -> None:
+        if ctx.terminal_action is not None or not ctx.draft_message.strip():
+            return
+        ctx.final_message = ctx.draft_message
+        ctx.cited_item_ids = list(ctx.draft_evidence)
+        for key in ctx.cited_item_ids:
+            ctx.interesting_item_ids.add(key)
+            ctx.discarded_item_ids.discard(key)
+        ctx.draft_message = ""
+        ctx.draft_evidence = []
+        ctx.terminal_action = "reply"
 
     async def _run_tool_step(
         self,
@@ -839,13 +868,18 @@ class AgentTick:
             ),
             lambda name, args: dispatch(name, args, ctx, self._tool_deps),
         )
-        if exec_result.status == "error":
-            logger.warning("[proactive_v2] %s: tool error: %s", loop_tag, exec_result.output)
+        if exec_result.status != "success":
+            logger.warning(
+                "[proactive_v2] %s: tool %s: %s",
+                loop_tag,
+                exec_result.status,
+                exec_result.output,
+            )
             result = str(exec_result.output)
             call_id = tool_call.get("id") or f"call_{ctx.steps_taken}"
             self._record_tick_step(
                 ctx,
-                phase=f"{loop_tag}:error",
+                phase=f"{loop_tag}:{exec_result.status}",
                 tool_name=tool_name,
                 tool_call_id=str(call_id),
                 tool_args=tool_args,

@@ -7,6 +7,7 @@ from pathlib import Path
 import uvicorn
 
 from agent.config_models import Config
+from bus.backends.asyncio_message_queue import AsyncioMessageQueue
 from core.net.http import SharedHttpResources
 from webapp.app import create_web_app
 from webapp.runtime_manager import (
@@ -25,6 +26,7 @@ async def run_web_chat_server(
     port: int = 2240,
 ) -> None:
     http_resources = SharedHttpResources()
+    message_queue = AsyncioMessageQueue()
     runtime_manager = UserRuntimeManager(
         config=config,
         base_workspace=workspace,
@@ -35,7 +37,11 @@ async def run_web_chat_server(
         workspace=workspace,
         store=web_store,
         agent_executor=UserRuntimeAgentExecutor(runtime_manager),
-        proactive_runner=UserRuntimeProactiveRunner(runtime_manager, web_store),
+        proactive_runner=UserRuntimeProactiveRunner(
+            runtime_manager,
+            web_store,
+            message_queue,
+        ),
     )
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info"))
     try:
@@ -43,5 +49,6 @@ async def run_web_chat_server(
     finally:
         with contextlib.suppress(asyncio.CancelledError):
             await runtime_manager.aclose()
+        await message_queue.close()
         web_store.close()
         await http_resources.aclose()

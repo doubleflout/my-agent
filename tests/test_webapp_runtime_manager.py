@@ -3,8 +3,17 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
+from agent.turns.outbound import OutboundDispatch
 from agent.config_models import Config
-from webapp.runtime_manager import UserRuntimeAgentExecutor, UserRuntimeManager, UserWorkspaceResolver
+from webapp.store import WebStore
+from webapp.runtime_manager import (
+    UserRuntimeAgentExecutor,
+    UserRuntimeManager,
+    UserWorkspaceResolver,
+    _WebProactiveOutboundPort,
+)
 
 
 class FakeLoop:
@@ -48,6 +57,22 @@ class FakeRuntime:
 
 class FakeHttpResources:
     pass
+
+
+class FakeWebStore:
+    def __init__(self) -> None:
+        self.messages: list[dict] = []
+
+    def add_message(self, **kwargs) -> None:
+        self.messages.append(kwargs)
+
+
+class FakeMessageQueue:
+    def __init__(self) -> None:
+        self.messages: list[object] = []
+
+    async def publish(self, message) -> None:
+        self.messages.append(message)
 
 
 def make_config() -> Config:
@@ -122,3 +147,81 @@ def test_user_runtime_agent_executor_uses_web_session_key(tmp_path):
         await manager.aclose()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.asyncio
+async def test_web_proactive_outbound_port_publishes_proactive_push_queue_event() -> None:
+    store = FakeWebStore()
+    queue = FakeMessageQueue()
+    port = _WebProactiveOutboundPort(
+        store=store,  # type: ignore[arg-type]
+        user_id="user-1",
+        conversation_id="conversation-1",
+        session_key="web:proactive:user-1:conversation-1",
+        message_queue=queue,  # type: ignore[arg-type]
+    )
+
+    dispatched = await port.dispatch(
+        OutboundDispatch(
+            channel="web_proactive",
+            chat_id="conversation-1",
+            content="该休息一下了",
+            media=["image.png"],
+            metadata={"source_id": "fitness"},
+        )
+    )
+
+    assert dispatched is True
+    assert store.messages[0]["content"] == "该休息一下了"
+    assert len(queue.messages) == 1
+    event = queue.messages[0]
+    assert event.topic == "agent.outbound"
+    assert event.event_type == "proactive_push"
+    assert event.user_id == "user-1"
+    assert event.session_key == "web:proactive:user-1:conversation-1"
+    assert event.conversation_id == "conversation-1"
+    assert event.source == "proactive"
+    assert event.payload == {
+        "role": "assistant",
+        "content": "该休息一下了",
+        "media": ["image.png"],
+    }
+    assert event.metadata["session_key"] == "web:proactive:user-1:conversation-1"
+    assert event.metadata["source_id"] == "fitness"
+
+
+@pytest.mark.asyncio
+async def test_web_proactive_outbound_port_persists_message_to_proactive_session(tmp_path) -> None:
+    store = WebStore("sqlite:///" + (tmp_path / "webapp.db").as_posix())
+    try:
+        user = store.create_user(
+            email="u1@example.com",
+            password_hash="hash",
+            display_name=None,
+        )
+        conversation = store.ensure_default_proactive_session(user_id=user.id)
+        port = _WebProactiveOutboundPort(
+            store=store,
+            user_id=user.id,
+            conversation_id=conversation.id,
+            session_key=conversation.session_key,
+        )
+
+        dispatched = await port.dispatch(
+            OutboundDispatch(
+                channel="web_proactive",
+                chat_id=conversation.id,
+                content="主动消息落库验证",
+            )
+        )
+
+        rows = store.list_messages(user_id=user.id, conversation_id=conversation.id)
+        assert dispatched is True
+        assert len(rows) == 1
+        assert rows[0].role == "assistant"
+        assert rows[0].content == "主动消息落库验证"
+        assert rows[0].metadata["source"] == "proactive"
+        assert rows[0].metadata["session_key"] == conversation.session_key
+        assert rows[0].id.startswith(conversation.session_key + ":")
+    finally:
+        store.close()
