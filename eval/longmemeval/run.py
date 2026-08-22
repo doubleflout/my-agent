@@ -81,6 +81,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Per-question agent timeout in seconds (default: 180)")
     p.add_argument("--type", dest="question_type", default=None,
                    help="Filter to a specific question_type (e.g. single-session-preference)")
+    p.add_argument("--langsmith", action="store_true",
+                   help="Trace each QA run to LangSmith without changing benchmark scoring")
+    p.add_argument("--langsmith-project", default=None,
+                   help="LangSmith project name for --langsmith traces")
     return p
 
 
@@ -189,6 +193,7 @@ async def _process_instance(
 ) -> None:
     from agent.config import load_config
     from .ingest import ingest_instance
+    from .langsmith_adapter import run_langsmith_traced_qa
     from .metrics import judge_answer, token_f1
     from .qa_runner import format_tool_trace, run_qa_instance
     from .runtime import close_runtime, create_runtime
@@ -255,7 +260,15 @@ async def _process_instance(
             progress.update(worker_task,
                             description=f"[cyan]{short_id}[/]  [yellow]agent[/]",
                             completed=0, total=1)
-            result = await run_qa_instance(rt, inst, timeout_s=args.timeout)
+            if args.langsmith:
+                result = await run_langsmith_traced_qa(
+                    rt,
+                    inst,
+                    timeout_s=args.timeout,
+                    project_name=args.langsmith_project,
+                )
+            else:
+                result = await run_qa_instance(rt, inst, timeout_s=args.timeout)
             results.append(result)
 
             # ── Judge ─────────────────────────────────────────────────────────

@@ -321,6 +321,73 @@ python -m eval.longmemeval.run_one_qa \
 
 这两种成功含义不一样。
 
+## LangSmith tracing
+
+这一步是可选的评测可视化外壳，不改主 Agent 链路。
+
+它的作用是：
+
+```text
+每一道 LongMemEval QA
+  -> 上传成一个 LangSmith run
+  -> 输入里包含 question / gold answer / session_key
+  -> 输出里包含 predicted answer / tool_chain / elapsed / error
+```
+
+它不负责：
+
+```text
+创建 LangSmith dataset
+替代本地 result.json
+替代本地 trace.log
+替代当前 judge / F1 / EM 评分
+```
+
+启用方式：
+
+```bash
+export LANGSMITH_TRACING=true
+export LANGSMITH_API_KEY="<your-langsmith-api-key>"
+export LANGSMITH_PROJECT="akashic-longmemeval"
+
+python -m eval.longmemeval.run \
+  --config eval/longmemeval/config.toml \
+  --data eval/longmemeval/data/longmemeval_akashic.json \
+  --workspace /tmp/lme_bench \
+  --limit 3 \
+  --workers 1 \
+  --resume-auto \
+  --langsmith
+```
+
+PowerShell 用法：
+
+```powershell
+$env:LANGSMITH_TRACING="true"
+$env:LANGSMITH_API_KEY="<your-langsmith-api-key>"
+$env:LANGSMITH_PROJECT="akashic-longmemeval"
+
+python -m eval.longmemeval.run --config eval/longmemeval/config.toml --data eval/longmemeval/data/longmemeval_akashic.json --workspace C:\tmp\lme_bench --limit 3 --workers 1 --resume-auto --langsmith
+```
+
+也可以显式指定项目名：
+
+```bash
+python -m eval.longmemeval.run ... --langsmith --langsmith-project akashic-longmemeval
+```
+
+当前这一步只生成 root trace。后续如果要看到更细的层级，可以继续把：
+
+```text
+recall_memory
+search_messages
+fetch_messages
+LLM provider.chat
+tool execution
+```
+
+分别包装成 LangSmith child runs。
+
 ## 保留的脚本
 
 目录里只保留 benchmark 主路径需要的脚本：
