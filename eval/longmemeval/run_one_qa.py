@@ -20,6 +20,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workspace", required=True, type=Path)
     p.add_argument("--question-id", required=True)
     p.add_argument("--timeout", type=float, default=180.0)
+    p.add_argument("--langsmith", action="store_true")
+    p.add_argument("--no-langsmith", action="store_true")
+    p.add_argument("--langsmith-project", default=None)
     return p
 
 
@@ -31,8 +34,26 @@ async def _run(args: argparse.Namespace) -> None:
 
     rt = await create_runtime(args.config, args.workspace)
     try:
-        result = await run_qa_instance(rt, inst, timeout_s=args.timeout)
         cfg = load_config(args.config)
+        langsmith_config = cfg.eval.langsmith
+        if args.langsmith_project:
+            langsmith_config.project = args.langsmith_project
+        if args.langsmith:
+            langsmith_config.enabled = True
+        if args.no_langsmith:
+            langsmith_config.enabled = False
+
+        if langsmith_config.enabled:
+            from .langsmith_adapter import run_langsmith_traced_qa
+
+            result = await run_langsmith_traced_qa(
+                rt,
+                inst,
+                timeout_s=args.timeout,
+                langsmith_config=langsmith_config,
+            )
+        else:
+            result = await run_qa_instance(rt, inst, timeout_s=args.timeout)
         result["judge_correct"] = await judge_answer(
             rt.core.provider,
             cfg.model,

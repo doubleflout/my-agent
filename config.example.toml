@@ -125,6 +125,18 @@ password = "${AKASHIC_POSTGRES_PASSWORD}"
 # database_url = "postgresql+psycopg://postgres:${AKASHIC_POSTGRES_PASSWORD}@localhost:5432/akashic_agent"
 
 # =============================================================================
+# 评测观测（可选）
+# 仅 eval/longmemeval 使用；不会影响主 Agent 运行。
+# =============================================================================
+
+[eval.langsmith]
+enabled = false
+project = "akashic-longmemeval"
+api_key = "${LANGSMITH_API_KEY}"
+# endpoint = "https://api.smith.langchain.com"
+# workspace_id = "${LANGSMITH_WORKSPACE_ID}"
+
+# =============================================================================
 # 主动推送（可选）
 # 先跑通基本对话再开启这部分。
 # =============================================================================

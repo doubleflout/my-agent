@@ -321,6 +321,70 @@ python -m eval.longmemeval.run_one_qa \
 
 这两种成功含义不一样。
 
+## LangSmith tracing
+
+LangSmith 在这里是一个可选的评测观测层，不改主 Agent 链路。
+
+它的作用是：
+
+```text
+每一道 LongMemEval QA
+  -> 上传成一个 LangSmith run
+  -> 输入里包含 question / gold answer / session_key
+  -> 输出里包含 predicted answer / tool_chain / elapsed / error
+```
+
+它不负责替代本地：
+
+```text
+result.json
+trace.log
+judge / F1 / EM
+```
+
+配置写在 `config.toml`：
+
+```toml
+[eval.langsmith]
+enabled = true
+project = "akashic-longmemeval"
+api_key = "${LANGSMITH_API_KEY}"
+# endpoint = "https://api.smith.langchain.com"
+# workspace_id = "${LANGSMITH_WORKSPACE_ID}"
+```
+
+然后正常运行即可，不需要额外加参数：
+
+```bash
+python -m eval.longmemeval.run \
+  --config eval/longmemeval/config.toml \
+  --data eval/longmemeval/data/longmemeval_akashic.json \
+  --workspace /tmp/lme_bench \
+  --limit 3 \
+  --workers 1 \
+  --resume-auto
+```
+
+命令行也可以临时覆盖配置：
+
+```bash
+python -m eval.longmemeval.run ... --langsmith
+python -m eval.longmemeval.run ... --no-langsmith
+python -m eval.longmemeval.run ... --langsmith-project akashic-longmemeval-dev
+```
+
+当前这一步只生成 root trace。后续如果要看到更细的层级，可以继续把：
+
+```text
+recall_memory
+search_messages
+fetch_messages
+LLM provider.chat
+tool execution
+```
+
+分别包装成 LangSmith child runs。
+
 ## 保留的脚本
 
 目录里只保留 benchmark 主路径需要的脚本：
