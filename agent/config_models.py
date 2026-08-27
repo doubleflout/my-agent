@@ -113,6 +113,21 @@ class WiringConfig:
 
 
 @dataclass
+class LangSmithEvalConfig:
+    enabled: bool = False
+    project: str = "akashic-longmemeval"
+    dataset: str = "akashic-longmemeval"
+    api_key: str = ""
+    endpoint: str = ""
+    workspace_id: str = ""
+
+
+@dataclass
+class EvalConfig:
+    langsmith: LangSmithEvalConfig = field(default_factory=LangSmithEvalConfig)
+
+
+@dataclass
 class Config:
     provider: str
     model: str
@@ -145,6 +160,7 @@ class Config:
     dev_mode: bool = False
     peer_agents: list[PeerAgentConfig] = field(default_factory=list)
     wiring: WiringConfig = field(default_factory=WiringConfig)
+    eval: EvalConfig = field(default_factory=EvalConfig)
 
     @classmethod
     def load(cls, path: str | Path = "config.toml") -> Config:
@@ -157,6 +173,8 @@ __all__ = [
     "ChannelsConfig",
     "Config",
     "FitbitIntegrationConfig",
+    "EvalConfig",
+    "LangSmithEvalConfig",
     "MemoryConfig",
     "MemoryEmbeddingConfig",
     "PostgresStorageConfig",

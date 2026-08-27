@@ -1,14 +1,28 @@
 """Optional LangSmith tracing adapter for LongMemEval.
 
+<<<<<<< HEAD
 This module keeps LangSmith out of the production agent path.  It only wraps
 benchmark QA calls when the eval CLI explicitly asks for it.
+=======
+This module keeps LangSmith out of the production agent path. It only wraps
+benchmark QA calls when the eval config explicitly enables it.
+>>>>>>> codex/langsmith
 """
 
 from __future__ import annotations
 
+<<<<<<< HEAD
 from pathlib import Path
 from typing import Any
 
+=======
+import os
+from pathlib import Path
+from typing import Any
+
+from agent.config_models import LangSmithEvalConfig
+
+>>>>>>> codex/langsmith
 from .dataset import LMEInstance
 from .qa_runner import run_qa_instance
 from .runtime import BenchmarkRuntime
@@ -25,6 +39,22 @@ def _load_langsmith() -> tuple[Any, Any]:
     return traceable, tracing_context
 
 
+<<<<<<< HEAD
+=======
+def configure_langsmith_env(config: LangSmithEvalConfig) -> None:
+    """Apply optional config.toml LangSmith settings for the current process."""
+    os.environ.setdefault("LANGSMITH_TRACING", "true")
+    if config.api_key:
+        os.environ["LANGSMITH_API_KEY"] = config.api_key
+    if config.project:
+        os.environ["LANGSMITH_PROJECT"] = config.project
+    if config.endpoint:
+        os.environ["LANGSMITH_ENDPOINT"] = config.endpoint
+    if config.workspace_id:
+        os.environ["LANGSMITH_WORKSPACE_ID"] = config.workspace_id
+
+
+>>>>>>> codex/langsmith
 def _trace_inputs(instance: LMEInstance, workspace: Path) -> dict[str, Any]:
     return {
         "question_id": instance.question_id,
@@ -42,6 +72,10 @@ def _trace_outputs(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "question_id": result.get("question_id"),
         "question_type": result.get("question_type"),
+<<<<<<< HEAD
+=======
+        "question": result.get("question"),
+>>>>>>> codex/langsmith
         "predicted_answer": result.get("predicted_answer"),
         "gold_answer": result.get("gold_answer"),
         "elapsed_s": result.get("elapsed_s"),
@@ -55,6 +89,7 @@ async def run_langsmith_traced_qa(
     instance: LMEInstance,
     *,
     timeout_s: float,
+<<<<<<< HEAD
     project_name: str | None = None,
 ) -> dict[str, Any]:
     """Run one QA instance and publish a root LangSmith trace.
@@ -65,15 +100,40 @@ async def run_langsmith_traced_qa(
     """
 
     traceable, tracing_context = _load_langsmith()
+=======
+    langsmith_config: LangSmithEvalConfig,
+) -> dict[str, Any]:
+    """Run one QA instance and publish a root LangSmith trace."""
+    traceable, tracing_context = _load_langsmith()
+    configure_langsmith_env(langsmith_config)
+>>>>>>> codex/langsmith
 
     @traceable(name="longmemeval_qa", run_type="chain")
     async def _target(inputs: dict[str, Any]) -> dict[str, Any]:
         result = await run_qa_instance(rt, instance, timeout_s=timeout_s)
         return _trace_outputs(result)
 
+<<<<<<< HEAD
     with tracing_context(enabled=True, project_name=project_name):
         traced = await _target(_trace_inputs(instance, rt.workspace))
 
     result = dict(traced)
     result.setdefault("question", instance.question)
+=======
+    with tracing_context(
+        enabled=True,
+        project_name=langsmith_config.project or None,
+    ):
+        traced = await _target(_trace_inputs(instance, rt.workspace))
+
+    result = dict(traced)
+    result.setdefault("question_id", instance.question_id)
+    result.setdefault("question_type", instance.question_type)
+    result.setdefault("question", instance.question)
+    result.setdefault("gold_answer", instance.answer)
+    result.setdefault("predicted_answer", "")
+    result.setdefault("tool_chain", [])
+    result.setdefault("elapsed_s", 0.0)
+    result.setdefault("error", None)
+>>>>>>> codex/langsmith
     return result

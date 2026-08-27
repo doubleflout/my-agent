@@ -323,7 +323,11 @@ python -m eval.longmemeval.run_one_qa \
 
 ## LangSmith tracing
 
+<<<<<<< HEAD
 这一步是可选的评测可视化外壳，不改主 Agent 链路。
+=======
+LangSmith 在这里是一个可选的评测观测层，不改主 Agent 链路。
+>>>>>>> codex/langsmith
 
 它的作用是：
 
@@ -334,6 +338,7 @@ python -m eval.longmemeval.run_one_qa \
   -> 输出里包含 predicted answer / tool_chain / elapsed / error
 ```
 
+<<<<<<< HEAD
 它不负责：
 
 ```text
@@ -350,12 +355,78 @@ export LANGSMITH_TRACING=true
 export LANGSMITH_API_KEY="<your-langsmith-api-key>"
 export LANGSMITH_PROJECT="akashic-longmemeval"
 
+=======
+它不负责替代本地：
+
+```text
+result.json
+trace.log
+judge / F1 / EM
+```
+
+配置写在 `config.toml`：
+
+```toml
+[eval.langsmith]
+enabled = true
+project = "akashic-longmemeval"
+dataset = "akashic-longmemeval"
+api_key = "${LANGSMITH_API_KEY}"
+# endpoint = "https://api.smith.langchain.com"
+# workspace_id = "${LANGSMITH_WORKSPACE_ID}"
+```
+
+### 上传 LangSmith Dataset
+
+Dataset 是题库本身，里面保存每道题的 `inputs / outputs / metadata`。
+
+```text
+inputs   = question + haystack_sessions + question_date
+outputs  = gold answer
+metadata = question_id + question_type + session_key
+```
+
+先 dry-run 看转换结果：
+
+```bash
+python -m eval.longmemeval.upload_langsmith_dataset \
+  --config eval/longmemeval/config.toml \
+  --data eval/longmemeval/dataset/longmemeval_akashic.json \
+  --dry-run
+```
+
+确认后上传：
+
+```bash
+python -m eval.longmemeval.upload_langsmith_dataset \
+  --config eval/longmemeval/config.toml \
+  --data eval/longmemeval/dataset/longmemeval_akashic.json
+```
+
+也可以只上传小样本：
+
+```bash
+python -m eval.longmemeval.upload_langsmith_dataset \
+  --config eval/longmemeval/config.toml \
+  --data eval/longmemeval/dataset/longmemeval_akashic.json \
+  --limit 3
+```
+
+### 上传运行 Trace
+
+Trace 是某次实验运行结果，记录 Agent 对某道题实际做了什么。
+
+然后正常运行即可，不需要额外加参数：
+
+```bash
+>>>>>>> codex/langsmith
 python -m eval.longmemeval.run \
   --config eval/longmemeval/config.toml \
   --data eval/longmemeval/data/longmemeval_akashic.json \
   --workspace /tmp/lme_bench \
   --limit 3 \
   --workers 1 \
+<<<<<<< HEAD
   --resume-auto \
   --langsmith
 ```
@@ -374,6 +445,17 @@ python -m eval.longmemeval.run --config eval/longmemeval/config.toml --data eval
 
 ```bash
 python -m eval.longmemeval.run ... --langsmith --langsmith-project akashic-longmemeval
+=======
+  --resume-auto
+```
+
+命令行也可以临时覆盖配置：
+
+```bash
+python -m eval.longmemeval.run ... --langsmith
+python -m eval.longmemeval.run ... --no-langsmith
+python -m eval.longmemeval.run ... --langsmith-project akashic-longmemeval-dev
+>>>>>>> codex/langsmith
 ```
 
 当前这一步只生成 root trace。后续如果要看到更细的层级，可以继续把：
