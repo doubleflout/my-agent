@@ -354,6 +354,7 @@ def _load_eval_config(data: dict) -> EvalConfig:
         langsmith=LangSmithEvalConfig(
             enabled=bool(langsmith.get("enabled", False)),
             project=str(langsmith.get("project", "akashic-longmemeval") or ""),
+            dataset=str(langsmith.get("dataset", "akashic-longmemeval") or ""),
             api_key=_normalize_optional_config_text(
                 _resolve(str(langsmith.get("api_key", "")))
             ),

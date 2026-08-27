@@ -116,6 +116,7 @@ class WiringConfig:
 class LangSmithEvalConfig:
     enabled: bool = False
     project: str = "akashic-longmemeval"
+    dataset: str = "akashic-longmemeval"
     api_key: str = ""
     endpoint: str = ""
     workspace_id: str = ""

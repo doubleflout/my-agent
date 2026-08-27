@@ -348,10 +348,51 @@ judge / F1 / EM
 [eval.langsmith]
 enabled = true
 project = "akashic-longmemeval"
+dataset = "akashic-longmemeval"
 api_key = "${LANGSMITH_API_KEY}"
 # endpoint = "https://api.smith.langchain.com"
 # workspace_id = "${LANGSMITH_WORKSPACE_ID}"
 ```
+
+### 上传 LangSmith Dataset
+
+Dataset 是题库本身，里面保存每道题的 `inputs / outputs / metadata`。
+
+```text
+inputs   = question + haystack_sessions + question_date
+outputs  = gold answer
+metadata = question_id + question_type + session_key
+```
+
+先 dry-run 看转换结果：
+
+```bash
+python -m eval.longmemeval.upload_langsmith_dataset \
+  --config eval/longmemeval/config.toml \
+  --data eval/longmemeval/dataset/longmemeval_akashic.json \
+  --dry-run
+```
+
+确认后上传：
+
+```bash
+python -m eval.longmemeval.upload_langsmith_dataset \
+  --config eval/longmemeval/config.toml \
+  --data eval/longmemeval/dataset/longmemeval_akashic.json
+```
+
+也可以只上传小样本：
+
+```bash
+python -m eval.longmemeval.upload_langsmith_dataset \
+  --config eval/longmemeval/config.toml \
+  --data eval/longmemeval/dataset/longmemeval_akashic.json \
+  --limit 3
+```
+
+### 上传运行 Trace
+
+Trace 是某次实验运行结果，记录 Agent 对某道题实际做了什么。
 
 然后正常运行即可，不需要额外加参数：
 

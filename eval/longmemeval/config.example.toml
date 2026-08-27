@@ -108,6 +108,7 @@ timeout_ms = 3000
 [eval.langsmith]
 enabled = false
 project = "akashic-longmemeval"
+dataset = "akashic-longmemeval"
 api_key = "${LANGSMITH_API_KEY}"
 # endpoint = "https://api.smith.langchain.com"
 # workspace_id = "${LANGSMITH_WORKSPACE_ID}"
