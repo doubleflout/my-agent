@@ -40,6 +40,32 @@ def _get_or_create_handler(
     return md
 
 
+def _get_existing_metadata(
+    *,
+    kind: MetadataKind,
+    event_type: PluginEventType | None,
+    handler_name: str,
+    module_path: str,
+    tool_name: str | None = None,
+    hook_tool_name: str | None = None,
+    compare_tool_name: bool = False,
+    compare_hook_tool_name: bool = False,
+) -> PluginHandlerMetadata | None:
+    for md in plugin_registry._handlers._handlers:
+        if md.kind != kind:
+            continue
+        if md.event_type != event_type:
+            continue
+        if md.handler_name != handler_name or md.plugin_module_path != module_path:
+            continue
+        if compare_tool_name and md.tool_name != tool_name:
+            continue
+        if compare_hook_tool_name and md.hook_tool_name != hook_tool_name:
+            continue
+        return md
+    return None
+
+
 def on_before_turn(**options: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def deco(func: Callable[..., Any]) -> Callable[..., Any]:
         _ = _get_or_create_handler(func, PluginEventType.BEFORE_TURN, HandlerType.GATE, **options)
@@ -111,6 +137,16 @@ def on_tool_pre(
     **options: Any,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def deco(func: Callable[..., Any]) -> Callable[..., Any]:
+        existing = _get_existing_metadata(
+            kind=MetadataKind.TOOL_HOOK,
+            event_type=PluginEventType.PRE_TOOL,
+            handler_name=func.__name__,
+            module_path=func.__module__,
+            hook_tool_name=tool_name,
+            compare_hook_tool_name=True,
+        )
+        if existing is not None:
+            return func
         md = PluginHandlerMetadata(
             kind=MetadataKind.TOOL_HOOK,
             event_type=PluginEventType.PRE_TOOL,
@@ -135,6 +171,16 @@ def tool(
     search_hint: str | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def deco(func: Callable[..., Any]) -> Callable[..., Any]:
+        existing = _get_existing_metadata(
+            kind=MetadataKind.TOOL,
+            event_type=None,
+            handler_name=func.__name__,
+            module_path=func.__module__,
+            tool_name=name,
+            compare_tool_name=True,
+        )
+        if existing is not None:
+            return func
         # 校验签名：前两个参数必须是 self 和 event，否则 partial 绑定会静默错位
         params = list(inspect.signature(func).parameters.keys())
         if len(params) < 2 or params[0] != "self" or params[1] != "event":

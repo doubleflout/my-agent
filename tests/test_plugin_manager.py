@@ -752,6 +752,21 @@ async def test_on_tool_pre_rewrites_rm_to_mv():
 
 
 @pytest.mark.asyncio
+async def test_reloading_same_tool_hook_plugin_does_not_duplicate_hooks():
+    """多用户 runtime 重复加载同一插件时，hook 元数据不能在全局 registry 里叠加。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        shutil.copytree(FIXTURES_DIR / "shell_restore", Path(tmp) / "shell_restore")
+        mgr1 = _make_manager([Path(tmp)], event_bus=EventBus())
+        mgr2 = _make_manager([Path(tmp)], event_bus=EventBus())
+
+        await mgr1.load_all()
+        await mgr2.load_all()
+
+        assert len(mgr1.tool_hooks) == 1
+        assert len(mgr2.tool_hooks) == 1
+
+
+@pytest.mark.asyncio
 async def test_on_tool_pre_skips_non_shell_tool():
     """非 shell 工具不触发 rm→mv 改写。"""
     bus = EventBus()
