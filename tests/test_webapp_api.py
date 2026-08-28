@@ -39,6 +39,31 @@ class FakeExecutor:
         return f"echo: {content}"
 
 
+class StreamingFakeExecutor(FakeExecutor):
+    async def run(
+        self,
+        *,
+        content: str,
+        user_id: str,
+        conversation_id: str,
+        session_key: str | None = None,
+        on_stream_event=None,
+    ) -> str:
+        self.calls.append(
+            {
+                "content": content,
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "session_key": session_key or "",
+            }
+        )
+        if on_stream_event is not None:
+            await on_stream_event({"thinking_delta": "先想一下"})
+            await on_stream_event({"content_delta": "你好"})
+            await on_stream_event({"content_delta": "呀"})
+        return "你好呀"
+
+
 def make_app(tmp_path: Path, executor: FakeExecutor | None = None):
     store = WebStore("sqlite:///" + (tmp_path / "web.db").as_posix())
     return create_web_app(
@@ -185,6 +210,35 @@ async def test_turn_stream_done_and_returns_pending_user_message(tmp_path):
         )
         roles = [item["role"] for item in messages.json()]
         assert roles == []
+
+
+async def test_turn_stream_forwards_thinking_and_content_deltas(tmp_path):
+    app = make_app(tmp_path, StreamingFakeExecutor())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        timeout=5.0,
+    ) as client:
+        token = await register(client, "stream-delta@example.com")
+        conv = await create_conversation(client, token)
+        post = await client.post(
+            f"/api/conversations/{conv}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"content": "hello stream"},
+        )
+        turn_id = post.json()["turn_id"]
+        stream = await client.get(
+            f"/api/turns/{turn_id}/stream",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert stream.status_code == 200
+    assert "event: thinking_delta" in stream.text
+    assert "先想一下" in stream.text
+    assert stream.text.count("event: content_delta") == 2
+    assert "你好" in stream.text
+    assert "呀" in stream.text
+    assert "event: done" in stream.text
 
 
 async def test_agent_failure_streams_error(tmp_path):

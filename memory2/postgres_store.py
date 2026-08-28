@@ -345,83 +345,87 @@ class PostgresMemoryStore:
         emotional_weight = _coerce_emotional_weight(emotional_weight)
         session_key = self._infer_session_key(extra=extra, source_ref=source_ref)
         with self._lock:
-            already = self._conn.execute(
-                """
-                SELECT item_id
-                FROM consolidation_events
-                WHERE user_id = %s AND source_ref = %s
-                """,
-                (self.user_id, src),
-            ).fetchone()
-            if already is not None:
-                existing_id = str(already["item_id"] or "")
-                return f"skipped:{existing_id or src}"
+            try:
+                already = self._conn.execute(
+                    """
+                    SELECT item_id
+                    FROM consolidation_events
+                    WHERE user_id = %s AND source_ref = %s
+                    """,
+                    (self.user_id, src),
+                ).fetchone()
+                if already is not None:
+                    existing_id = str(already["item_id"] or "")
+                    return f"skipped:{existing_id or src}"
 
-            chash = _content_hash(text, "event")
-            existing = self._conn.execute(
-                """
-                SELECT id, status
-                FROM memory_items
-                WHERE user_id = %s AND content_hash = %s AND memory_type = 'event'
-                """,
-                (self.user_id, chash),
-            ).fetchone()
-            if existing is not None:
-                row_id = str(existing["id"])
+                chash = _content_hash(text, "event")
+                existing = self._conn.execute(
+                    """
+                    SELECT id, status
+                    FROM memory_items
+                    WHERE user_id = %s AND content_hash = %s AND memory_type = 'event'
+                    """,
+                    (self.user_id, chash),
+                ).fetchone()
+                if existing is not None:
+                    row_id = str(existing["id"])
+                    self._conn.execute(
+                        """
+                        UPDATE memory_items
+                        SET status = 'active',
+                            reinforcement = reinforcement + 1,
+                            updated_at = %s,
+                            emotional_weight = GREATEST(emotional_weight, %s),
+                            happened_at = COALESCE(happened_at, %s::timestamptz)
+                        WHERE user_id = %s AND id = %s
+                        """,
+                        (_now_iso(), emotional_weight, happened_at, self.user_id, row_id),
+                    )
+                    item_id = row_id
+                    result = f"reinforced:{row_id}"
+                else:
+                    item_id = hashlib.md5(f"{chash}{datetime.now().timestamp()}".encode()).hexdigest()[:12]
+                    if session_key:
+                        self._ensure_session(session_key, _now_iso())
+                    self._conn.execute(
+                        """
+                        INSERT INTO memory_items(
+                            id, user_id, session_key, memory_type, summary, content_hash, embedding,
+                            emotional_weight, extra_json, source_ref, happened_at, created_at, updated_at
+                        )
+                        VALUES (
+                            %s, %s, %s, 'event', %s, %s, %s::vector, %s, %s, %s, %s, %s, %s
+                        )
+                        """,
+                        (
+                            item_id,
+                            self.user_id,
+                            session_key,
+                            text,
+                            chash,
+                            _vector_literal(embedding),
+                            emotional_weight,
+                            Jsonb(extra or {}),
+                            src,
+                            happened_at,
+                            _now_iso(),
+                            _now_iso(),
+                        ),
+                    )
+                    result = f"new:{item_id}"
+
                 self._conn.execute(
                     """
-                    UPDATE memory_items
-                    SET status = 'active',
-                        reinforcement = reinforcement + 1,
-                        updated_at = %s,
-                        emotional_weight = GREATEST(emotional_weight, %s),
-                        happened_at = COALESCE(NULLIF(happened_at::text, ''), %s::timestamptz)
-                    WHERE id = %s
+                    INSERT INTO consolidation_events(user_id, source_ref, item_id, session_key, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
                     """,
-                    (_now_iso(), emotional_weight, happened_at, row_id),
+                    (self.user_id, src, item_id, session_key, _now_iso()),
                 )
-                item_id = row_id
-                result = f"reinforced:{row_id}"
-            else:
-                item_id = hashlib.md5(f"{chash}{datetime.now().timestamp()}".encode()).hexdigest()[:12]
-                if session_key:
-                    self._ensure_session(session_key, _now_iso())
-                self._conn.execute(
-                    """
-                    INSERT INTO memory_items(
-                        id, user_id, session_key, memory_type, summary, content_hash, embedding,
-                        emotional_weight, extra_json, source_ref, happened_at, created_at, updated_at
-                    )
-                    VALUES (
-                        %s, %s, %s, 'event', %s, %s, %s::vector, %s, %s, %s, %s, %s, %s
-                    )
-                    """,
-                    (
-                        item_id,
-                        self.user_id,
-                        session_key,
-                        text,
-                        chash,
-                        _vector_literal(embedding),
-                        emotional_weight,
-                        Jsonb(extra or {}),
-                        src,
-                        happened_at,
-                        _now_iso(),
-                        _now_iso(),
-                    ),
-                )
-                result = f"new:{item_id}"
-
-            self._conn.execute(
-                """
-                INSERT INTO consolidation_events(user_id, source_ref, item_id, session_key, created_at)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (self.user_id, src, item_id, session_key, _now_iso()),
-            )
-            self._conn.commit()
-            return result
+                self._conn.commit()
+                return result
+            except Exception:
+                self._rollback_if_needed()
+                raise
 
     def has_consolidation_source_ref(self, source_ref: str) -> bool:
         row = self._conn.execute(

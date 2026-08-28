@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -36,6 +38,17 @@ from webapp.security import (
 from webapp.sse import TurnStreamBroker
 from webapp.runtime_manager import UserWorkspaceResolver
 from webapp.store import DuplicateEmailError, UserRecord, WebStore, database_url_from_config
+
+
+def _executor_accepts_stream_events(executor: AgentExecutor) -> bool:
+    try:
+        signature = inspect.signature(executor.run)
+    except (TypeError, ValueError):
+        return True
+    return (
+        "on_stream_event" in signature.parameters
+        or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+    )
 
 
 def _secret_from_env() -> str:
@@ -223,16 +236,38 @@ def create_web_app(
         session_key: str,
         content: str,
     ) -> None:
+        streamed_content = False
+
+        async def publish_stream(delta: dict[str, str]) -> None:
+            nonlocal streamed_content
+            content_delta = str(delta.get("content_delta") or "")
+            thinking_delta = str(delta.get("thinking_delta") or "")
+            if thinking_delta:
+                await broker.publish(
+                    turn_id,
+                    {"event": "thinking_delta", "data": {"text": thinking_delta}},
+                )
+            if content_delta:
+                streamed_content = True
+                await broker.publish(
+                    turn_id,
+                    {"event": "content_delta", "data": {"text": content_delta}},
+                )
+
         try:
             web_store.update_turn(turn_id=turn_id, status="running")
-            response = await executor.run(
-                content=content,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                session_key=session_key,
-            )
+            run_kwargs: dict[str, Any] = {
+                "content": content,
+                "user_id": user_id,
+                "conversation_id": conversation_id,
+                "session_key": session_key,
+            }
+            if _executor_accepts_stream_events(executor):
+                run_kwargs["on_stream_event"] = publish_stream
+            response = await executor.run(**run_kwargs)
             web_store.update_turn(turn_id=turn_id, status="completed")
-            await broker.publish(turn_id, {"event": "content_delta", "data": {"text": response}})
+            if response and not streamed_content:
+                await broker.publish(turn_id, {"event": "content_delta", "data": {"text": response}})
             await broker.publish(turn_id, {"event": "done", "data": {"turn_id": turn_id}})
         except Exception as exc:
             web_store.update_turn(turn_id=turn_id, status="failed", error=str(exc))

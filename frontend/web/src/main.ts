@@ -43,6 +43,8 @@ type Message = {
   conversation_id: string;
   role: string;
   content: string;
+  thinking?: string;
+  streaming?: boolean;
   created_at: string;
 };
 
@@ -238,6 +240,19 @@ const App = defineComponent({
         );
         void scrollToBottom();
       }
+      if (event === "thinking_delta") {
+        messages.value = messages.value.map((item) =>
+          item.id === `pending:${turnId}`
+            ? { ...item, thinking: String(item.thinking || "") + String(data.text || "") }
+            : item,
+        );
+        void scrollToBottom();
+      }
+      if (event === "done") {
+        messages.value = messages.value.map((item) =>
+          item.id === `pending:${turnId}` ? { ...item, streaming: false } : item,
+        );
+      }
       if (event === "error") error.value = String(data.message || "Agent failed");
     }
 
@@ -406,6 +421,12 @@ const App = defineComponent({
                 }),
                 h("div", { class: "bubble" }, [
                   h("div", { class: "bubble-name" }, assistant ? "Akashic" : "You"),
+                  assistant && message.thinking
+                    ? h("div", { class: "thinking-box" }, [
+                        h("div", { class: "thinking-title" }, "思考"),
+                        h("div", { class: "thinking-content" }, message.thinking),
+                      ])
+                    : null,
                   h("div", { class: "bubble-content" },
                     message.content || (busy.value && assistant ? "正在思考..." : ""),
                   ),
@@ -496,6 +517,8 @@ function pendingAssistant(turnId: string, conversationId: string): Message {
     conversation_id: conversationId,
     role: "assistant",
     content: "",
+    thinking: "",
+    streaming: true,
     created_at: new Date().toISOString(),
   };
 }

@@ -384,6 +384,32 @@ input {
   overflow-wrap: anywhere;
 }
 
+.thinking-box {
+  width: min(680px, 100%);
+  max-height: 180px;
+  margin: 2px 0 10px;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid #d7e7e3;
+  border-radius: 8px;
+  background: #f3faf8;
+  color: #35524d;
+}
+
+.thinking-title {
+  margin-bottom: 5px;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.thinking-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 .chat-error {
   width: min(860px, calc(100% - 48px));
   margin: 0 auto 12px;

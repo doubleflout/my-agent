@@ -24,7 +24,7 @@ from proactive_v2.judge import MessageDeduper
 from proactive_v2.mcp_sources import McpClientPool
 from proactive_v2.sensor import Sensor
 from proactive_v2.state import build_proactive_state_store
-from webapp.agent_executor import AgentExecutor, web_session_key
+from webapp.agent_executor import AgentExecutor, StreamEventHandler, web_session_key
 from webapp.proactive_scheduler import WebProactiveJob
 from webapp.store import WebStore
 
@@ -136,14 +136,22 @@ class UserRuntimeAgentExecutor(AgentExecutor):
         user_id: str,
         conversation_id: str,
         session_key: str | None = None,
+        on_stream_event: StreamEventHandler | None = None,
     ) -> str:
         runtime = await self.runtime_manager.get_runtime(user_id)
+        actual_session_key = session_key or web_session_key(user_id, conversation_id)
+        if on_stream_event is not None:
+            runtime.loop.set_stream_sink_factory(
+                lambda msg: on_stream_event
+                if str(getattr(msg, "session_key", "")) == actual_session_key
+                else None
+            )
         return await runtime.loop.process_direct(
             content=content,
-            session_key=session_key or web_session_key(user_id, conversation_id),
+            session_key=actual_session_key,
             channel="web",
             chat_id=conversation_id,
-            stream_events=False,
+            stream_events=on_stream_event is not None,
         )
 
 
