@@ -303,6 +303,7 @@ def build_registered_tools(
     scheduler = build_scheduler(
         workspace,
         push_tool,
+        config=config,
         agent_loop_provider=agent_loop_provider,
     )
     peer_process_manager, peer_poller = build_peer_agent_resources(

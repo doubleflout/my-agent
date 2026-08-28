@@ -101,6 +101,8 @@ class ScheduleTool(Tool):
         tz = kwargs.get("timezone") or self._default_tz
         name = kwargs.get("name")
         request_time = kwargs.get("request_time")
+        session_key = str(kwargs.get("session_key") or "").strip() or None
+        user_id = str(kwargs.get("user_id") or "").strip() or None
 
         # ── validation ──
         if tier not in ("instant", "soft"):
@@ -152,7 +154,7 @@ class ScheduleTool(Tool):
             name=name,
             timezone=tz,
         )
-        self._service.add_job(job)
+        self._service.add_job(job, session_key=session_key, user_id=user_id)
 
         # 优先用 fire_at 自带的时区（来自 request_time 的 offset），
         # 让用户看到本地时间而不是 UTC

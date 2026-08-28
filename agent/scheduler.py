@@ -272,6 +272,8 @@ class ScheduledJob:
 
     name: str | None = None
     timezone: str = "UTC"
+    session_key: str | None = None
+    user_id: str | None = None
 
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     run_count: int = 0
@@ -345,6 +347,7 @@ class SchedulerService:
         agent_loop: Any = None,
         agent_loop_provider: Callable[[], Any] | None = None,
         tracker: LatencyTracker | None = None,
+        schedule_store: Any | None = None,
         _now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         self.store = JobStore(store_path)
@@ -352,6 +355,7 @@ class SchedulerService:
         self.agent_loop = agent_loop
         self._agent_loop_provider = agent_loop_provider
         self.tracker = tracker or LatencyTracker()
+        self.schedule_store = schedule_store
         self._now = _now_fn or (lambda: datetime.now(timezone.utc))
         self._jobs: dict[str, ScheduledJob] = {}
         self._in_flight: set[str] = set()
@@ -370,12 +374,28 @@ class SchedulerService:
     def stop(self) -> None:
         self._running = False
 
-    def add_job(self, job: ScheduledJob) -> None:
+    def add_job(
+        self,
+        job: ScheduledJob,
+        *,
+        session_key: str | None = None,
+        user_id: str | None = None,
+    ) -> None:
         # Ensure fire_at is UTC-aware
         if job.fire_at.tzinfo is None:
             job.fire_at = job.fire_at.replace(tzinfo=timezone.utc)
+        if session_key:
+            job.session_key = session_key
+        if user_id:
+            job.user_id = user_id
         self._jobs[job.id] = job
         self.store.save(self._jobs)
+        if self.schedule_store is not None and job.session_key:
+            self.schedule_store.upsert_job(
+                job=job,
+                session_key=job.session_key,
+                user_id=job.user_id,
+            )
         logger.info(
             f"Job added: {job.id[:8]} tier={job.tier} trigger={job.trigger} "
             f"fire_at={job.fire_at.isoformat()}"

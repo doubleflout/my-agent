@@ -23,6 +23,20 @@ def make_svc(tmp_path, mock_push, mock_loop):
     )
 
 
+class FakeScheduleStore:
+    def __init__(self) -> None:
+        self.upserts = []
+
+    def upsert_job(self, *, job, session_key, user_id=None):
+        self.upserts.append(
+            {
+                "job": job,
+                "session_key": session_key,
+                "user_id": user_id,
+            }
+        )
+
+
 # ── ScheduleTool: validation ──────────────────────────────────────
 
 
@@ -189,6 +203,43 @@ async def test_named_job(tmp_path, mock_push, mock_loop):
     )
     job = list(svc._jobs.values())[0]
     assert job.name == "my-reminder"
+
+
+async def test_schedule_tool_persists_job_to_pg_store_with_session_key(
+    tmp_path,
+    mock_push,
+    mock_loop,
+):
+    pg_store = FakeScheduleStore()
+    svc = SchedulerService(
+        store_path=tmp_path / "jobs.json",
+        push_tool=mock_push,
+        agent_loop=mock_loop,
+        tracker=LatencyTracker(default=25.0),
+        _now_fn=_NOW_FN,
+        schedule_store=pg_store,
+    )
+    tool = ScheduleTool(svc, default_tz="UTC")
+
+    result = await tool.execute(
+        tier="soft",
+        trigger="every",
+        when="0 9 * * *",
+        channel="web",
+        chat_id="conversation-1",
+        prompt="根据昨天聊天做复盘",
+        name="每日复盘",
+        session_key="web:user-1:conversation-1",
+        user_id="user-1",
+    )
+
+    assert "错误" not in result
+    assert len(pg_store.upserts) == 1
+    synced = pg_store.upserts[0]
+    assert synced["session_key"] == "web:user-1:conversation-1"
+    assert synced["user_id"] == "user-1"
+    assert synced["job"].name == "每日复盘"
+    assert synced["job"].cron_expr == "0 9 * * *"
 
 
 # ── ListSchedulesTool ────────────────────────────────────────────

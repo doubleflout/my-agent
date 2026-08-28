@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agent.scheduler import LatencyTracker, SchedulerService
+from agent.scheduler_postgres_store import PostgresScheduleStore
 from agent.tools.message_push import MessagePushTool
 from agent.tools.registry import ToolRegistry
 from agent.tools.schedule import CancelScheduleTool, ListSchedulesTool, ScheduleTool
@@ -47,14 +48,22 @@ def build_scheduler(
     workspace: Path,
     push_tool: MessagePushTool,
     *,
+    config: Any | None = None,
     agent_loop_provider: Callable[[], Any] | None = None,
 ) -> SchedulerService:
+    schedule_store = None
+    storage = getattr(config, "storage", None)
+    if str(getattr(storage, "backend", "")).lower() == "postgres":
+        from webapp.store import database_url_from_config
+
+        schedule_store = PostgresScheduleStore(database_url_from_config(config, workspace))
     return SchedulerService(
         store_path=workspace / "schedules.json",
         push_tool=push_tool,
         agent_loop=None,
         agent_loop_provider=agent_loop_provider,
         tracker=LatencyTracker(),
+        schedule_store=schedule_store,
     )
 
 
