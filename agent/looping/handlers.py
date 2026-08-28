@@ -71,7 +71,7 @@ async def process_spawn_completion_event(
     )
 
     # 2. 再调用主模型生成用户可见回复。
-    tools.set_context(channel=item.channel, chat_id=item.chat_id)
+    tools.set_context(session_key=key, channel=item.channel, chat_id=item.chat_id)
     prompt_render = await prompt_render_fn(
         PromptRenderInput(
             session_key=key,

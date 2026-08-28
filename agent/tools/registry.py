@@ -123,7 +123,7 @@ class ToolRegistry:
         self._backend: SearchBackend = backend or KeywordSearchBackend()
 
     def set_context(self, **kwargs: str) -> None:
-        """设置当前会话上下文（channel、chat_id 等），供工具按需读取。"""
+        """设置当前会话上下文（session_key、channel、chat_id 等），供工具按需读取。"""
         self._context.update(kwargs)
 
     def get_context(self) -> dict[str, str]:

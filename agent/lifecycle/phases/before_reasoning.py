@@ -52,6 +52,7 @@ class _SyncToolContextModule:
         if state.session is None:
             raise RuntimeError("BeforeReasoning requires TurnState.session")
         self._tools.set_context(
+            session_key=before_turn.session_key,
             channel=before_turn.channel,
             chat_id=before_turn.chat_id,
             current_user_source_ref=predict_current_user_source_ref(

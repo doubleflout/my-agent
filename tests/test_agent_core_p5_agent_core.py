@@ -125,6 +125,7 @@ async def test_agent_core_process_runs_prepare_prompt_run_commit_in_order():
     assert render_request.skill_names == ["refactor"]
     assert render_request.retrieved_memory_block == "remembered"
     tools.set_context.assert_called_once_with(
+        session_key="telegram:123",
         channel="telegram",
         chat_id="123",
         current_user_source_ref="telegram:123:0",
