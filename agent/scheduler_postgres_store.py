@@ -119,3 +119,19 @@ class PostgresScheduleStore:
                 ),
             )
             self._conn.commit()
+
+    def disable_job(self, job_id: str) -> None:
+        clean = str(job_id or "").strip()
+        if not clean:
+            return
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE schedules
+                SET enabled = FALSE,
+                    updated_at = %s
+                WHERE id = %s
+                """,
+                (_now_iso(), clean),
+            )
+            self._conn.commit()

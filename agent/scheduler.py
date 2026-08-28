@@ -406,6 +406,8 @@ class SchedulerService:
             return False
         del self._jobs[job_id]
         self.store.save(self._jobs)
+        if self.schedule_store is not None:
+            self.schedule_store.disable_job(job_id)
         return True
 
     def cancel_job_by_name(self, name: str) -> list[str]:
@@ -414,6 +416,9 @@ class SchedulerService:
             del self._jobs[jid]
         if cancelled:
             self.store.save(self._jobs)
+            if self.schedule_store is not None:
+                for jid in cancelled:
+                    self.schedule_store.disable_job(jid)
         return cancelled
 
     def list_jobs(self) -> list[ScheduledJob]:
@@ -490,6 +495,15 @@ class SchedulerService:
             else:
                 self._jobs.pop(job.id, None)
             self.store.save(self._jobs)
+            if self.schedule_store is not None and job.session_key:
+                if job.trigger == "every":
+                    self.schedule_store.upsert_job(
+                        job=job,
+                        session_key=job.session_key,
+                        user_id=job.user_id,
+                    )
+                else:
+                    self.schedule_store.disable_job(job.id)
 
     async def _execute(self, job: ScheduledJob) -> None:
         label = job.name or job.id[:8]

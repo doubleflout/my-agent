@@ -22,6 +22,26 @@ def make_service(tmp_path, mock_push, mock_loop, now, tracker=None):
     )
 
 
+class FakeScheduleStore:
+    def __init__(self) -> None:
+        self.upserts = []
+        self.disabled = []
+
+    def upsert_job(self, *, job, session_key, user_id=None):
+        self.upserts.append(
+            {
+                "job": job,
+                "session_key": session_key,
+                "user_id": user_id,
+                "fire_at": job.fire_at,
+                "run_count": job.run_count,
+            }
+        )
+
+    def disable_job(self, job_id: str) -> None:
+        self.disabled.append(job_id)
+
+
 # ── Execution: INSTANT ───────────────────────────────────────────
 
 
@@ -229,6 +249,41 @@ async def test_every_run_count_increments(tmp_path, mock_push, mock_loop, fixed_
     assert svc._jobs[job.id].run_count == 1
 
 
+async def test_every_job_updates_pg_store_after_reschedule(
+    tmp_path,
+    mock_push,
+    mock_loop,
+    fixed_now,
+):
+    pg_store = FakeScheduleStore()
+    svc = SchedulerService(
+        store_path=tmp_path / "jobs.json",
+        push_tool=mock_push,
+        agent_loop=mock_loop,
+        tracker=LatencyTracker(default=25.0),
+        schedule_store=pg_store,
+        _now_fn=lambda: fixed_now,
+    )
+    job = make_job(
+        trigger="every",
+        tier="instant",
+        fire_at=fixed_now - timedelta(seconds=1),
+        interval_seconds=60,
+    )
+    job.session_key = "web:user-1:conversation-1"
+    job.user_id = "user-1"
+    svc._jobs[job.id] = job
+
+    await svc._tick()
+    await drain_tasks()
+
+    assert len(pg_store.upserts) == 1
+    assert pg_store.upserts[0]["session_key"] == "web:user-1:conversation-1"
+    assert pg_store.upserts[0]["user_id"] == "user-1"
+    assert pg_store.upserts[0]["run_count"] == 1
+    assert pg_store.upserts[0]["fire_at"] == svc._jobs[job.id].fire_at
+
+
 async def test_every_soft_p90_updates_affect_next_trigger(
     tmp_path, mock_push, mock_loop, fixed_now
 ):
@@ -351,6 +406,25 @@ def test_cancel_job_by_id(tmp_path, mock_push, mock_loop, fixed_now):
     assert job.id not in svc._jobs
 
 
+def test_cancel_job_by_id_disables_pg_store(tmp_path, mock_push, mock_loop, fixed_now):
+    pg_store = FakeScheduleStore()
+    svc = SchedulerService(
+        store_path=tmp_path / "jobs.json",
+        push_tool=mock_push,
+        agent_loop=mock_loop,
+        tracker=LatencyTracker(default=25.0),
+        schedule_store=pg_store,
+        _now_fn=lambda: fixed_now,
+    )
+    job = make_job()
+    svc._jobs[job.id] = job
+
+    result = svc.cancel_job(job.id)
+
+    assert result is True
+    assert pg_store.disabled == [job.id]
+
+
 def test_cancel_nonexistent_returns_false(tmp_path, mock_push, mock_loop, fixed_now):
     svc = make_service(tmp_path, mock_push, mock_loop, fixed_now)
     assert svc.cancel_job("nonexistent-id") is False
@@ -368,3 +442,24 @@ def test_cancel_by_name(tmp_path, mock_push, mock_loop, fixed_now):
     assert len(cancelled) == 1
     assert j1.id not in svc._jobs
     assert j2.id in svc._jobs
+
+
+def test_cancel_by_name_disables_pg_store(tmp_path, mock_push, mock_loop, fixed_now):
+    pg_store = FakeScheduleStore()
+    svc = SchedulerService(
+        store_path=tmp_path / "jobs.json",
+        push_tool=mock_push,
+        agent_loop=mock_loop,
+        tracker=LatencyTracker(default=25.0),
+        schedule_store=pg_store,
+        _now_fn=lambda: fixed_now,
+    )
+    j1 = make_job(name="daily-weather")
+    j2 = make_job(name="daily-weather")
+    svc._jobs[j1.id] = j1
+    svc._jobs[j2.id] = j2
+
+    cancelled = svc.cancel_job_by_name("daily-weather")
+
+    assert cancelled == [j1.id, j2.id]
+    assert pg_store.disabled == [j1.id, j2.id]
