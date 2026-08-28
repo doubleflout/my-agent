@@ -236,3 +236,4 @@ if __name__ == "__main__":
         connect_cli(config_path)
     else:
         asyncio.run(serve(config_path, workspace))
+#  python main.py web --host 127.0.0.1 --port 2240 
