@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import os
 import uuid
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from webapp.schemas import (
     CreateMessageResponse,
     LoginRequest,
     MessageResponse,
+    MessageSourceResponse,
     RegisterRequest,
     TokenResponse,
     UserResponse,
@@ -140,6 +142,38 @@ def create_web_app(
             updated_at=conv.updated_at,
         )
 
+    def load_message_sources(user_id: str) -> list[MessageSourceResponse]:
+        path = workspace_resolver.for_user(user_id) / "proactive_sources.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return []
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to read proactive sources: {exc}") from exc
+        raw_sources = data.get("sources", []) if isinstance(data, dict) else data
+        if not isinstance(raw_sources, list):
+            return []
+        sources: list[MessageSourceResponse] = []
+        for index, raw in enumerate(raw_sources):
+            if not isinstance(raw, dict):
+                continue
+            source_id = str(raw.get("id") or "").strip()
+            if not source_id:
+                source_id = f"source-{index + 1}"
+            sources.append(
+                MessageSourceResponse(
+                    id=source_id,
+                    name=str(raw.get("name") or source_id),
+                    type=str(raw.get("type") or "content"),
+                    enabled=bool(raw.get("enabled", True)),
+                    server=str(raw.get("server") or "") or None,
+                    get_tool=str(raw.get("get_tool") or "") or None,
+                    ack_tool=str(raw.get("ack_tool") or "") or None,
+                    description=str(raw.get("description") or "") or None,
+                )
+            )
+        return sources
+
     def get_current_user(authorization: str | None = Header(default=None)) -> UserRecord:
         if not authorization or not authorization.lower().startswith("bearer "):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing token")
@@ -205,6 +239,12 @@ def create_web_app(
         if conv is None:
             conv = web_store.ensure_default_proactive_session(user_id=user.id)
         return conversation_to_response(conv)
+
+    @app.get("/api/proactive/sources", response_model=list[MessageSourceResponse])
+    async def list_proactive_sources(
+        user: UserRecord = Depends(get_current_user),
+    ) -> list[MessageSourceResponse]:
+        return load_message_sources(user.id)
 
     @app.get(
         "/api/conversations/{conversation_id}/messages",

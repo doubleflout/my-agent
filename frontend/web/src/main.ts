@@ -24,20 +24,34 @@ import {
   theme,
 } from "ant-design-vue";
 import {
+  ApiOutlined,
+  CheckCircleOutlined,
   LoginOutlined,
   LogoutOutlined,
   MessageOutlined,
   PlusOutlined,
   RobotOutlined,
   SendOutlined,
+  StopOutlined,
   UserOutlined,
 } from "@ant-design/icons-vue";
 import "ant-design-vue/dist/reset.css";
 import "./style.css";
 
 type AuthMode = "login" | "register";
+type MainView = "chat" | "sources";
 type User = { id: string; email: string; display_name: string | null };
 type Conversation = { id: string; title: string; session_key?: string | null; updated_at: string };
+type MessageSource = {
+  id: string;
+  name: string;
+  type: string;
+  enabled: boolean;
+  server?: string | null;
+  get_tool?: string | null;
+  ack_tool?: string | null;
+  description?: string | null;
+};
 type Message = {
   id: string;
   conversation_id: string;
@@ -61,13 +75,16 @@ const App = defineComponent({
     const displayName = ref("");
     const conversations = ref<Conversation[]>([]);
     const proactiveConversation = ref<Conversation | null>(null);
+    const sources = ref<MessageSource[]>([]);
     const activeId = ref("");
+    const mainView = ref<MainView>("chat");
     const messages = ref<Message[]>([]);
     const draft = ref("");
     const busy = ref(false);
     const booting = ref(Boolean(token.value));
     const authLoading = ref(false);
     const conversationLoading = ref(false);
+    const sourcesLoading = ref(false);
     const error = ref("");
     const messagePane = ref<HTMLElement | null>(null);
 
@@ -78,6 +95,7 @@ const App = defineComponent({
     );
     const canSend = computed(() => Boolean(draft.value.trim() && activeId.value && !busy.value));
     const authTitle = computed(() => (mode.value === "login" ? "欢迎回来" : "创建账号"));
+    const enabledSourceCount = computed(() => sources.value.filter((item) => item.enabled).length);
 
     function authedHeaders(extra?: HeadersInit) {
       const headers = new Headers(extra);
@@ -121,6 +139,15 @@ const App = defineComponent({
       if (!activeId.value) activeId.value = proactiveConversation.value.id;
     }
 
+    async function refreshSources() {
+      sourcesLoading.value = true;
+      try {
+        sources.value = await request<MessageSource[]>("/api/proactive/sources");
+      } finally {
+        sourcesLoading.value = false;
+      }
+    }
+
     async function loadMessages(conversationId: string) {
       messages.value = await request<Message[]>(`/api/conversations/${conversationId}/messages`);
       await scrollToBottom();
@@ -135,6 +162,7 @@ const App = defineComponent({
         await loadMe();
         await refreshProactiveConversation();
         await refreshConversations();
+        await refreshSources();
       } catch {
         localStorage.removeItem(TOKEN_KEY);
         token.value = "";
@@ -162,6 +190,7 @@ const App = defineComponent({
         await loadMe();
         await refreshProactiveConversation();
         await refreshConversations();
+        await refreshSources();
       } catch (err) {
         setError(err);
       } finally {
@@ -178,7 +207,21 @@ const App = defineComponent({
           body: JSON.stringify({ title }),
         });
         conversations.value = [conversation, ...conversations.value];
-        activeId.value = conversation.id;
+        selectConversation(conversation.id);
+      } catch (err) {
+        setError(err);
+      }
+    }
+
+    function selectConversation(id: string) {
+      mainView.value = "chat";
+      activeId.value = id;
+    }
+
+    async function showSources() {
+      mainView.value = "sources";
+      try {
+        await refreshSources();
       } catch (err) {
         setError(err);
       }
@@ -267,8 +310,10 @@ const App = defineComponent({
       user.value = null;
       conversations.value = [];
       proactiveConversation.value = null;
+      sources.value = [];
       messages.value = [];
       activeId.value = "";
+      mainView.value = "chat";
       password.value = "";
     }
 
@@ -371,9 +416,9 @@ const App = defineComponent({
               class: [
                 "conversation-item",
                 "proactive-entry",
-                proactiveConversation.value.id === activeId.value ? "active" : "",
+                mainView.value === "chat" && proactiveConversation.value.id === activeId.value ? "active" : "",
               ],
-              onClick: () => (activeId.value = proactiveConversation.value?.id || ""),
+              onClick: () => selectConversation(proactiveConversation.value?.id || ""),
             }, [
               h("span", { class: "conversation-icon" }, [h(RobotOutlined)]),
               h("span", { class: "conversation-title" }, proactiveConversation.value.title || "主动推送"),
@@ -389,18 +434,62 @@ const App = defineComponent({
               renderItem: ({ item }: { item: Conversation }) =>
                 h(List.Item, null, () =>
                   h("button", {
-                    class: ["conversation-item", item.id === activeId.value ? "active" : ""],
-                    onClick: () => (activeId.value = item.id),
+                    class: [
+                      "conversation-item",
+                      mainView.value === "chat" && item.id === activeId.value ? "active" : "",
+                    ],
+                    onClick: () => selectConversation(item.id),
                   }, [
                     h("span", { class: "conversation-icon" }, [h(MessageOutlined)]),
                     h("span", { class: "conversation-title" }, item.title),
                   ]),
                 ),
             }),
+        h("div", { class: "sidebar-bottom" }, [
+          h("button", {
+            class: ["source-entry", mainView.value === "sources" ? "active" : ""],
+            onClick: () => void showSources(),
+          }, [
+            h("span", { class: "conversation-icon" }, [h(ApiOutlined)]),
+            h("span", { class: "conversation-title" }, "消息源"),
+            h("span", { class: "source-count" }, String(enabledSourceCount.value)),
+          ]),
+        ]),
+      ]);
+    }
+
+    function renderSources() {
+      return h("div", { class: "sources-view" }, [
+        sourcesLoading.value
+          ? h("div", { class: "empty-chat" }, [h(Spin), h("span", "加载消息源")])
+          : sources.value.length === 0
+            ? h("div", { class: "empty-chat" }, [h(Empty, { description: "还没有订阅消息源" })])
+            : h("div", { class: "source-list-panel" }, sources.value.map((source) =>
+                h("article", { key: source.id, class: "source-row" }, [
+                  h("span", { class: ["source-state", source.enabled ? "enabled" : "disabled"] }, [
+                    h(source.enabled ? CheckCircleOutlined : StopOutlined),
+                  ]),
+                  h("div", { class: "source-main" }, [
+                    h("div", { class: "source-title-line" }, [
+                      h("strong", source.name || source.id),
+                      h("span", { class: "source-pill" }, source.type || "content"),
+                    ]),
+                    source.description
+                      ? h("p", { class: "source-description" }, source.description)
+                      : null,
+                    h("div", { class: "source-meta" }, [
+                      source.server ? h("span", `server: ${source.server}`) : null,
+                      source.get_tool ? h("span", `get: ${source.get_tool}`) : null,
+                      source.ack_tool ? h("span", `ack: ${source.ack_tool}`) : null,
+                    ].filter(Boolean)),
+                  ]),
+                ]),
+              )),
       ]);
     }
 
     function renderMessages() {
+      if (mainView.value === "sources") return renderSources();
       if (!activeId.value) {
         return h("div", { class: "empty-chat" }, [
           h(Empty, { description: "创建或选择一个会话开始聊天" }),
@@ -442,12 +531,16 @@ const App = defineComponent({
         h(Layout.Content, { class: "chat-main" }, () => [
           h("header", { class: "chat-header" }, [
             h("div", [
-              h(Typography.Title, { level: 3 }, () => activeConversation.value?.title || "选择会话"),
+              h(Typography.Title, { level: 3 }, () =>
+                mainView.value === "sources" ? "消息源" : activeConversation.value?.title || "选择会话",
+              ),
               h(Typography.Text, { type: "secondary" }, () =>
-                activeId.value ? "当前对话" : "从左侧选择一个对话",
+                mainView.value === "sources"
+                  ? `已启用 ${enabledSourceCount.value} 个订阅`
+                  : activeId.value ? "当前对话" : "从左侧选择一个对话",
               ),
             ]),
-            busy.value ? h(Spin, { size: "small" }) : null,
+            busy.value || sourcesLoading.value ? h(Spin, { size: "small" }) : null,
           ]),
           renderMessages(),
           error.value ? h(Alert, {
@@ -458,34 +551,36 @@ const App = defineComponent({
             closable: true,
             onClose: () => (error.value = ""),
           }) : null,
-          h("form", {
-            class: "composer",
-            onSubmit: (event: Event) => {
-              event.preventDefault();
-              void sendMessage();
-            },
-          }, [
-            h(Input.TextArea, {
-              value: draft.value,
-              rows: 2,
-              placeholder: activeId.value ? "输入消息，和 Agent 继续推进任务..." : "请先创建会话",
-              disabled: !activeId.value || busy.value,
-              onInput: (event: Event) => (draft.value = (event.target as HTMLTextAreaElement).value),
-              onKeydown: (event: KeyboardEvent) => {
-                if (event.key === "Enter" && !event.shiftKey) {
+          mainView.value === "chat"
+            ? h("form", {
+                class: "composer",
+                onSubmit: (event: Event) => {
                   event.preventDefault();
                   void sendMessage();
-                }
-              },
-            }),
-            h(Button, {
-              type: "primary",
-              size: "large",
-              disabled: !canSend.value,
-              loading: busy.value,
-              htmlType: "submit",
-            }, () => [h(SendOutlined), "发送"]),
-          ]),
+                },
+              }, [
+                h(Input.TextArea, {
+                  value: draft.value,
+                  rows: 2,
+                  placeholder: activeId.value ? "输入消息，和 Agent 继续推进任务..." : "请先创建会话",
+                  disabled: !activeId.value || busy.value,
+                  onInput: (event: Event) => (draft.value = (event.target as HTMLTextAreaElement).value),
+                  onKeydown: (event: KeyboardEvent) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void sendMessage();
+                    }
+                  },
+                }),
+                h(Button, {
+                  type: "primary",
+                  size: "large",
+                  disabled: !canSend.value,
+                  loading: busy.value,
+                  htmlType: "submit",
+                }, () => [h(SendOutlined), "发送"]),
+              ])
+            : null,
         ]),
       ]);
     }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import httpx
@@ -148,6 +149,57 @@ async def test_proactive_conversation_endpoint_returns_default_session(tmp_path)
         body = res.json()
         assert body["title"] == "主动推送"
         assert body["session_key"].startswith("web:proactive:")
+
+
+async def test_proactive_sources_are_loaded_from_user_workspace(tmp_path):
+    app = make_app(tmp_path)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        token = await register(client, "sources@example.com")
+        me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        user_id = me.json()["id"]
+        source_path = tmp_path / "users" / user_id / "proactive_sources.json"
+        source_path.write_text(
+            json.dumps(
+                {
+                    "sources": [
+                        {
+                            "id": "bilibili-fitness-hot",
+                            "name": "B站健身热点",
+                            "type": "content",
+                            "enabled": True,
+                            "server": "bilibili-fitness",
+                            "get_tool": "get_fitness_proactive_events",
+                            "ack_tool": "acknowledge_events",
+                            "description": "B站运动分区热门榜健身内容",
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        res = await client.get(
+            "/api/proactive/sources",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert res.json() == [
+        {
+            "id": "bilibili-fitness-hot",
+            "name": "B站健身热点",
+            "type": "content",
+            "enabled": True,
+            "server": "bilibili-fitness",
+            "get_tool": "get_fitness_proactive_events",
+            "ack_tool": "acknowledge_events",
+            "description": "B站运动分区热门榜健身内容",
+        }
+    ]
 
 
 async def test_conversation_isolation_and_session_key(tmp_path):

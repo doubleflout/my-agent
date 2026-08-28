@@ -57,6 +57,17 @@ class ConversationResponse(BaseModel):
     updated_at: datetime
 
 
+class MessageSourceResponse(BaseModel):
+    id: str
+    name: str
+    type: str
+    enabled: bool = True
+    server: str | None = None
+    get_tool: str | None = None
+    ack_tool: str | None = None
+    description: str | None = None
+
+
 class MessageResponse(BaseModel):
     id: str
     conversation_id: str
