@@ -26,13 +26,14 @@ async def run_web_chat_server(
     port: int = 2240,
 ) -> None:
     http_resources = SharedHttpResources()
+    web_store = WebStore(database_url_from_config(config, workspace))
     message_queue = AsyncioMessageQueue()
     runtime_manager = UserRuntimeManager(
         config=config,
         base_workspace=workspace,
         http_resources=http_resources,
+        web_store=web_store,
     )
-    web_store = WebStore(database_url_from_config(config, workspace))
     app = create_web_app(
         workspace=workspace,
         store=web_store,

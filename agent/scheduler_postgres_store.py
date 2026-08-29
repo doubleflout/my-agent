@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import psycopg
@@ -29,15 +29,17 @@ def _job_spec(job: Any) -> dict[str, Any]:
 
 
 class PostgresScheduleStore:
-    """PostgreSQL mirror for SchedulerService jobs.
+    """PostgreSQL-backed SchedulerService jobs.
 
-    The JSON JobStore remains the runtime source of truth for the current
-    scheduler. This store mirrors additions into public.schedules so Web/API
-    layers can query user-owned scheduled jobs.
+    When attached to SchedulerService this store is the runtime source of truth;
+    the JSON JobStore remains a local compatibility mirror.
     """
 
-    def __init__(self, database_url: str) -> None:
+    runtime_source = True
+
+    def __init__(self, database_url: str, *, user_id: str | None = None) -> None:
         self.database_url = database_url
+        self.user_id = str(user_id or "").strip() or None
         self._lock = threading.RLock()
         self._conn = psycopg.connect(_dsn(database_url), row_factory=dict_row)
         self._ensure_schema()
@@ -78,6 +80,62 @@ class PostgresScheduleStore:
         if row and row.get("user_id"):
             return str(row["user_id"])
         return None
+
+    @staticmethod
+    def _parse_dt(value: Any) -> datetime:
+        if isinstance(value, datetime):
+            dt = value
+        else:
+            text = str(value or "").strip()
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            dt = datetime.fromisoformat(text) if text else datetime.now(timezone.utc)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    def load_jobs(self) -> list[Any]:
+        from agent.scheduler import ScheduledJob
+
+        where = ["enabled = TRUE"]
+        params: list[object] = []
+        if self.user_id:
+            where.append("user_id = %s")
+            params.append(self.user_id)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT id, user_id, session_key, name, spec_json, enabled, created_at
+                FROM schedules
+                WHERE {' AND '.join(where)}
+                ORDER BY updated_at ASC, created_at ASC
+                """,
+                tuple(params),
+            ).fetchall()
+        jobs: list[Any] = []
+        for row in rows:
+            spec = row["spec_json"] or {}
+            if isinstance(spec, str):
+                try:
+                    spec = json.loads(spec)
+                except Exception:
+                    spec = {}
+            if not isinstance(spec, dict):
+                spec = {}
+            data = dict(spec)
+            data["id"] = str(row["id"])
+            data["user_id"] = str(row["user_id"]) if row["user_id"] else data.get("user_id")
+            data["session_key"] = str(row["session_key"])
+            data["name"] = str(row["name"] or data.get("name") or "")
+            data["enabled"] = bool(row["enabled"])
+            data["fire_at"] = self._parse_dt(data.get("fire_at"))
+            data["created_at"] = self._parse_dt(data.get("created_at") or row["created_at"])
+            try:
+                jobs.append(ScheduledJob(**data))
+            except TypeError:
+                allowed = set(ScheduledJob.__dataclass_fields__)
+                jobs.append(ScheduledJob(**{key: value for key, value in data.items() if key in allowed}))
+        return jobs
 
     def upsert_job(
         self,

@@ -424,12 +424,24 @@ class SchedulerService:
     def list_jobs(self) -> list[ScheduledJob]:
         return list(self._jobs.values())
 
+    def _use_external_runtime_store(self) -> bool:
+        return bool(getattr(self.schedule_store, "runtime_source", False)) and hasattr(
+            self.schedule_store,
+            "load_jobs",
+        )
+
+    def _load_persisted_jobs(self) -> list[ScheduledJob]:
+        if self._use_external_runtime_store():
+            return list(self.schedule_store.load_jobs())
+        return self.store.load()
+
     def load_and_recover(self) -> None:
         """启动时加载持久化 jobs，处理 misfire。"""
         now = self._now()
-        jobs = self.store.load()
+        jobs = self._load_persisted_jobs()
         count_loaded = 0
 
+        self._jobs.clear()
         for job in jobs:
             if not job.enabled:
                 continue
@@ -461,7 +473,29 @@ class SchedulerService:
 
     # ── Internal ────────────────────────────────────────────────
 
+    def _sync_external_runtime_jobs(self) -> None:
+        if not self._use_external_runtime_store():
+            return
+        try:
+            loaded = {
+                job.id: job
+                for job in self.schedule_store.load_jobs()
+                if getattr(job, "enabled", True)
+            }
+        except Exception as exc:
+            logger.warning("[scheduler] PG schedule sync failed: %s", exc)
+            return
+        for job_id in list(self._jobs):
+            if job_id not in loaded and job_id not in self._in_flight:
+                self._jobs.pop(job_id, None)
+        for job_id, job in loaded.items():
+            if job_id not in self._in_flight:
+                if job.fire_at.tzinfo is None:
+                    job.fire_at = job.fire_at.replace(tzinfo=timezone.utc)
+                self._jobs[job_id] = job
+
     async def _tick(self) -> None:
+        self._sync_external_runtime_jobs()
         now = self._now()
         for job in list(self._jobs.values()):
             if not job.enabled or job.id in self._in_flight:
@@ -521,7 +555,7 @@ class SchedulerService:
                 content=job.prompt,
                 channel=job.channel,
                 chat_id=job.chat_id,
-                session_key=f"scheduler:{job.id}",
+                session_key=job.session_key or f"scheduler:{job.id}",
                 omit_user_turn=True,
                 skip_post_memory=True,
                 disabled_tools=["message_push"],

@@ -29,6 +29,7 @@ from webapp.schemas import (
     RegisterRequest,
     ScheduleResponse,
     TokenResponse,
+    UpdateScheduleRequest,
     UserResponse,
 )
 from bootstrap.init_workspace import init_user_workspace
@@ -266,6 +267,111 @@ def create_web_app(
             return pg_schedules
         return load_schedules_from_json(user_id)
 
+    def update_schedule_json(
+        user_id: str,
+        schedule_id: str,
+        *,
+        enabled: bool,
+    ) -> ScheduleResponse | None:
+        path = workspace_resolver.for_user(user_id) / "schedules.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to read schedules: {exc}") from exc
+        if not isinstance(data, list):
+            return None
+        updated: dict[str, Any] | None = None
+        for raw in data:
+            if not isinstance(raw, dict):
+                continue
+            if str(raw.get("id") or "").strip() != schedule_id:
+                continue
+            raw["enabled"] = enabled
+            updated = raw
+            break
+        if updated is None:
+            return None
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return schedule_to_response(updated, enabled=enabled)
+
+    def update_schedule_pg(
+        user_id: str,
+        schedule_id: str,
+        *,
+        enabled: bool,
+    ) -> ScheduleResponse | None:
+        try:
+            from sqlalchemy import inspect as sa_inspect
+
+            inspector = sa_inspect(web_store.engine)
+            if "schedules" not in set(inspector.get_table_names()):
+                return None
+            with web_store.engine.begin() as conn:
+                row = conn.execute(
+                    text(
+                        """
+                        SELECT s.id, s.name, s.session_key, s.spec_json
+                        FROM schedules s
+                        LEFT JOIN sessions ss ON ss.key = s.session_key
+                        WHERE s.id = :schedule_id
+                          AND (s.user_id = :user_id OR ss.user_id = :user_id)
+                        LIMIT 1
+                        """
+                    ),
+                    {"schedule_id": schedule_id, "user_id": user_id},
+                ).mappings().first()
+                if row is None:
+                    return None
+                spec = row["spec_json"] or {}
+                if isinstance(spec, str):
+                    try:
+                        spec = json.loads(spec)
+                    except Exception:
+                        spec = {}
+                if not isinstance(spec, dict):
+                    spec = {}
+                spec = dict(spec)
+                spec["enabled"] = enabled
+                spec["id"] = str(row["id"])
+                spec["name"] = str(row["name"] or spec.get("name") or "")
+                spec["session_key"] = str(row["session_key"] or spec.get("session_key") or "")
+                conn.execute(
+                    text(
+                        """
+                        UPDATE schedules
+                        SET enabled = :enabled,
+                            spec_json = CAST(:spec_json AS JSONB),
+                            updated_at = now()
+                        WHERE id = :schedule_id
+                        """
+                    ),
+                    {
+                        "enabled": enabled,
+                        "spec_json": json.dumps(spec, ensure_ascii=False, default=str),
+                        "schedule_id": schedule_id,
+                    },
+                )
+                return schedule_to_response(spec, enabled=enabled)
+        except HTTPException:
+            raise
+        except Exception:
+            return None
+
+    def update_schedule(
+        user_id: str,
+        schedule_id: str,
+        *,
+        enabled: bool,
+    ) -> ScheduleResponse:
+        pg_item = update_schedule_pg(user_id, schedule_id, enabled=enabled)
+        json_item = update_schedule_json(user_id, schedule_id, enabled=enabled)
+        item = pg_item or json_item
+        if item is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        return item
+
     def get_current_user(authorization: str | None = Header(default=None)) -> UserRecord:
         if not authorization or not authorization.lower().startswith("bearer "):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing token")
@@ -343,6 +449,14 @@ def create_web_app(
         user: UserRecord = Depends(get_current_user),
     ) -> list[ScheduleResponse]:
         return load_schedules(user.id)
+
+    @app.patch("/api/schedules/{schedule_id}", response_model=ScheduleResponse)
+    async def patch_schedule(
+        schedule_id: str,
+        req: UpdateScheduleRequest,
+        user: UserRecord = Depends(get_current_user),
+    ) -> ScheduleResponse:
+        return update_schedule(user.id, schedule_id, enabled=req.enabled)
 
     @app.get(
         "/api/conversations/{conversation_id}/messages",

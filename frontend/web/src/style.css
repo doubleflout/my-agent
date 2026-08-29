@@ -441,6 +441,11 @@ input {
   font-weight: 650;
 }
 
+.source-title-actions {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
 .source-description {
   margin: 0;
   color: #525252;

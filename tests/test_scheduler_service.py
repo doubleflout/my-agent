@@ -26,6 +26,8 @@ class FakeScheduleStore:
     def __init__(self) -> None:
         self.upserts = []
         self.disabled = []
+        self.loaded_jobs = []
+        self.runtime_source = False
 
     def upsert_job(self, *, job, session_key, user_id=None):
         self.upserts.append(
@@ -40,6 +42,9 @@ class FakeScheduleStore:
 
     def disable_job(self, job_id: str) -> None:
         self.disabled.append(job_id)
+
+    def load_jobs(self):
+        return list(self.loaded_jobs)
 
 
 # ── Execution: INSTANT ───────────────────────────────────────────
@@ -106,6 +111,31 @@ async def test_soft_calls_process_direct_not_push_directly(
     assert call_kwargs.kwargs["chat_id"] == "123"
     assert call_kwargs.kwargs["skip_post_memory"] is True
     assert call_kwargs.kwargs["disabled_tools"] == ["message_push"]
+
+
+async def test_soft_uses_target_session_key_when_available(
+    tmp_path,
+    mock_push,
+    mock_loop,
+    fixed_now,
+):
+    svc = make_service(tmp_path, mock_push, mock_loop, fixed_now)
+    job = make_job(
+        tier="soft",
+        fire_at=fixed_now - timedelta(seconds=30),
+        channel="web",
+        chat_id="conversation-1",
+        message=None,
+        prompt="根据昨天聊天做复盘",
+    )
+    job.session_key = "web:user-1:conversation-1"
+    svc._jobs[job.id] = job
+
+    await svc._tick()
+    await drain_tasks()
+
+    call_kwargs = mock_loop.process_direct.call_args
+    assert call_kwargs.kwargs["session_key"] == "web:user-1:conversation-1"
 
 
 async def test_soft_sends_ai_response_via_push(
@@ -390,6 +420,72 @@ def test_every_misfire_advances_to_future(tmp_path, mock_push, mock_loop, fixed_
 
     assert job.id in svc._jobs
     assert svc._jobs[job.id].fire_at > fixed_now
+
+
+def test_load_and_recover_uses_pg_schedule_store_when_available(
+    tmp_path,
+    mock_push,
+    mock_loop,
+    fixed_now,
+):
+    pg_store = FakeScheduleStore()
+    pg_job = make_job(
+        trigger="at",
+        tier="instant",
+        fire_at=fixed_now + timedelta(seconds=60),
+        message="pg reminder",
+    )
+    pg_job.session_key = "web:user-1:conversation-1"
+    pg_job.user_id = "user-1"
+    pg_store.loaded_jobs = [pg_job]
+    pg_store.runtime_source = True
+    svc = SchedulerService(
+        store_path=tmp_path / "jobs.json",
+        push_tool=mock_push,
+        agent_loop=mock_loop,
+        tracker=LatencyTracker(default=25.0),
+        schedule_store=pg_store,
+        _now_fn=lambda: fixed_now,
+    )
+
+    svc.load_and_recover()
+
+    assert list(svc._jobs) == [pg_job.id]
+    assert svc._jobs[pg_job.id].message == "pg reminder"
+
+
+async def test_tick_syncs_pg_schedule_store_enabled_state(
+    tmp_path,
+    mock_push,
+    mock_loop,
+    fixed_now,
+):
+    pg_store = FakeScheduleStore()
+    job = make_job(
+        trigger="at",
+        tier="instant",
+        fire_at=fixed_now - timedelta(seconds=1),
+        message="should not fire",
+    )
+    job.session_key = "web:user-1:conversation-1"
+    job.user_id = "user-1"
+    pg_store.loaded_jobs = []
+    pg_store.runtime_source = True
+    svc = SchedulerService(
+        store_path=tmp_path / "jobs.json",
+        push_tool=mock_push,
+        agent_loop=mock_loop,
+        tracker=LatencyTracker(default=25.0),
+        schedule_store=pg_store,
+        _now_fn=lambda: fixed_now,
+    )
+    svc._jobs[job.id] = job
+
+    await svc._tick()
+    await drain_tasks()
+
+    assert job.id not in svc._jobs
+    mock_push.execute.assert_not_called()
 
 
 # ── Cancel ───────────────────────────────────────────────────────

@@ -30,6 +30,8 @@ import {
   LoginOutlined,
   LogoutOutlined,
   MessageOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
   PlusOutlined,
   RobotOutlined,
   SendOutlined,
@@ -102,6 +104,7 @@ const App = defineComponent({
     const conversationLoading = ref(false);
     const sourcesLoading = ref(false);
     const schedulesLoading = ref(false);
+    const togglingScheduleIds = ref<Set<string>>(new Set());
     const error = ref("");
     const messagePane = ref<HTMLElement | null>(null);
 
@@ -172,6 +175,26 @@ const App = defineComponent({
         scheduledJobs.value = await request<ScheduleItem[]>("/api/schedules");
       } finally {
         schedulesLoading.value = false;
+      }
+    }
+
+    async function toggleSchedule(job: ScheduleItem) {
+      const nextEnabled = !job.enabled;
+      togglingScheduleIds.value = new Set([...togglingScheduleIds.value, job.id]);
+      try {
+        const updated = await request<ScheduleItem>(`/api/schedules/${job.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ enabled: nextEnabled }),
+        });
+        scheduledJobs.value = scheduledJobs.value.map((item) =>
+          item.id === updated.id ? updated : item,
+        );
+      } catch (err) {
+        setError(err);
+      } finally {
+        const next = new Set(togglingScheduleIds.value);
+        next.delete(job.id);
+        togglingScheduleIds.value = next;
       }
     }
 
@@ -575,6 +598,17 @@ const App = defineComponent({
                     h("div", { class: "source-title-line" }, [
                       h("strong", job.name || job.id),
                       h("span", { class: "source-pill" }, scheduleKindText(job)),
+                      h("span", { class: "source-title-actions" }, [
+                        h(Button, {
+                          size: "small",
+                          type: job.enabled ? "default" : "primary",
+                          loading: togglingScheduleIds.value.has(job.id),
+                          onClick: () => void toggleSchedule(job),
+                        }, () => [
+                          h(job.enabled ? PauseCircleOutlined : PlayCircleOutlined),
+                          job.enabled ? "暂停" : "启用",
+                        ]),
+                      ]),
                     ]),
                     job.action_preview
                       ? h("p", { class: "source-description" }, job.action_preview)

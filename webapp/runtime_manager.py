@@ -51,6 +51,7 @@ class UserWorkspaceResolver:
 class _RuntimeEntry:
     runtime: CoreRuntime
     last_used: float
+    scheduler_task: asyncio.Task[Any] | None = None
 
 
 class UserRuntimeManager:
@@ -69,11 +70,13 @@ class UserRuntimeManager:
         max_cached: int | None = None,
         ttl_seconds: int | None = None,
         runtime_builder: Callable[[Config, Path, SharedHttpResources], CoreRuntime] = build_core_runtime,
+        web_store: WebStore | None = None,
     ) -> None:
         self.config = config
         self.resolver = UserWorkspaceResolver(base_workspace)
         self.http_resources = http_resources
         self.runtime_builder = runtime_builder
+        self.web_store = web_store
         self.max_cached = max(1, int(max_cached or os.environ.get("AKASHIC_WEB_RUNTIME_CACHE_MAX", "20")))
         self.ttl_seconds = max(60, int(ttl_seconds or os.environ.get("AKASHIC_WEB_RUNTIME_TTL_SECONDS", "1800")))
         self._entries: dict[str, _RuntimeEntry] = {}
@@ -95,15 +98,51 @@ class UserRuntimeManager:
             workspace = self.workspace_for_user(user_id)
             runtime = self.runtime_builder(self.config, workspace, self.http_resources)
             await runtime.start()
-            self._entries[user_id] = _RuntimeEntry(runtime=runtime, last_used=now)
+            self._register_web_push_sender(runtime, user_id)
+            scheduler_task = self._start_scheduler_task(runtime, user_id)
+            self._entries[user_id] = _RuntimeEntry(
+                runtime=runtime,
+                last_used=now,
+                scheduler_task=scheduler_task,
+            )
             return runtime
+
+    def _start_scheduler_task(
+        self,
+        runtime: CoreRuntime,
+        user_id: str,
+    ) -> asyncio.Task[Any] | None:
+        scheduler = getattr(runtime, "scheduler", None)
+        run = getattr(scheduler, "run", None)
+        if not callable(run):
+            return None
+        return asyncio.create_task(run(), name=f"web_user_scheduler:{user_id}")
+
+    def _register_web_push_sender(self, runtime: CoreRuntime, user_id: str) -> None:
+        if self.web_store is None:
+            return
+        push_tool = getattr(runtime, "push_tool", None)
+        register_channel = getattr(push_tool, "register_channel", None)
+        if not callable(register_channel):
+            return
+
+        async def send_web_text(conversation_id: str, message: str) -> None:
+            self.web_store.add_message(
+                conversation_id=str(conversation_id),
+                user_id=user_id,
+                role="assistant",
+                content=message,
+                metadata={"source": "scheduler"},
+            )
+
+        register_channel("web", text=send_web_text)
 
     async def aclose(self) -> None:
         async with self._lock:
             entries = list(self._entries.values())
             self._entries.clear()
         for entry in entries:
-            await entry.runtime.stop()
+            await self._stop_entry(entry)
 
     async def _evict_expired_locked(self, now: float) -> None:
         expired = [
@@ -113,7 +152,7 @@ class UserRuntimeManager:
         ]
         for user_id in expired:
             entry = self._entries.pop(user_id)
-            await entry.runtime.stop()
+            await self._stop_entry(entry)
 
     async def _evict_lru_if_needed_locked(self) -> None:
         while len(self._entries) >= self.max_cached:
@@ -122,7 +161,14 @@ class UserRuntimeManager:
                 key=lambda item: item[1].last_used,
             )
             self._entries.pop(user_id)
-            await entry.runtime.stop()
+            await self._stop_entry(entry)
+
+    async def _stop_entry(self, entry: _RuntimeEntry) -> None:
+        if entry.scheduler_task is not None:
+            entry.scheduler_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await entry.scheduler_task
+        await entry.runtime.stop()
 
 
 class UserRuntimeAgentExecutor(AgentExecutor):

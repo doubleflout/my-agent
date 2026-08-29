@@ -83,6 +83,10 @@ class ScheduleResponse(BaseModel):
     action_preview: str = ""
 
 
+class UpdateScheduleRequest(BaseModel):
+    enabled: bool
+
+
 class MessageResponse(BaseModel):
     id: str
     conversation_id: str

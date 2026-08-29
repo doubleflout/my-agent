@@ -45,6 +45,8 @@ class FakeRuntime:
     def __init__(self, workspace: Path) -> None:
         self.workspace = workspace
         self.loop = FakeLoop()
+        self.push_tool = FakePushTool()
+        self.scheduler = FakeScheduler()
         self.started = 0
         self.stopped = 0
 
@@ -65,6 +67,23 @@ class FakeWebStore:
 
     def add_message(self, **kwargs) -> None:
         self.messages.append(kwargs)
+
+
+class FakePushTool:
+    def __init__(self) -> None:
+        self.channels: dict[str, dict] = {}
+
+    def register_channel(self, channel: str, **kwargs) -> None:
+        self.channels[channel] = kwargs
+
+
+class FakeScheduler:
+    def __init__(self) -> None:
+        self.started = 0
+
+    async def run(self) -> None:
+        self.started += 1
+        await asyncio.Event().wait()
 
 
 class FakeMessageQueue:
@@ -144,6 +163,66 @@ def test_user_runtime_agent_executor_uses_web_session_key(tmp_path):
         assert built[0].loop.calls[0]["session_key"] == "web:u1:c1"
         assert built[0].loop.calls[0]["channel"] == "web"
         assert built[0].workspace == tmp_path / "workspace" / "users" / "u1"
+        await manager.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_runtime_manager_registers_web_message_push_sender(tmp_path):
+    async def scenario() -> None:
+        store = FakeWebStore()
+        built: list[FakeRuntime] = []
+
+        def builder(config, workspace, http_resources):
+            runtime = FakeRuntime(workspace)
+            built.append(runtime)
+            return runtime
+
+        manager = UserRuntimeManager(
+            config=make_config(),
+            base_workspace=tmp_path / "workspace",
+            http_resources=FakeHttpResources(),  # type: ignore[arg-type]
+            runtime_builder=builder,  # type: ignore[arg-type]
+            web_store=store,  # type: ignore[arg-type]
+        )
+        runtime = await manager.get_runtime("user-1")
+        sender = runtime.push_tool.channels["web"]["text"]
+
+        await sender("conversation-1", "定时任务提醒")
+
+        assert store.messages == [
+            {
+                "conversation_id": "conversation-1",
+                "user_id": "user-1",
+                "role": "assistant",
+                "content": "定时任务提醒",
+                "metadata": {"source": "scheduler"},
+            }
+        ]
+        await manager.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_runtime_manager_starts_scheduler_for_user_runtime(tmp_path):
+    async def scenario() -> None:
+        built: list[FakeRuntime] = []
+
+        def builder(config, workspace, http_resources):
+            runtime = FakeRuntime(workspace)
+            built.append(runtime)
+            return runtime
+
+        manager = UserRuntimeManager(
+            config=make_config(),
+            base_workspace=tmp_path / "workspace",
+            http_resources=FakeHttpResources(),  # type: ignore[arg-type]
+            runtime_builder=builder,  # type: ignore[arg-type]
+        )
+        await manager.get_runtime("user-1")
+        await asyncio.sleep(0)
+
+        assert built[0].scheduler.started == 1
         await manager.aclose()
 
     asyncio.run(scenario())

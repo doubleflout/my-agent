@@ -15,6 +15,13 @@ from bootstrap.toolsets.protocol import (
 )
 
 
+def _workspace_user_id(workspace: Path) -> str | None:
+    if workspace.parent.name != "users":
+        return None
+    user_id = workspace.name.strip()
+    return user_id or None
+
+
 class SchedulerToolsetProvider(ToolsetProvider):
     def register(self, registry: ToolRegistry, deps: ToolsetDeps):
         before = set(registry._tools.keys())
@@ -56,7 +63,10 @@ def build_scheduler(
     if str(getattr(storage, "backend", "")).lower() == "postgres":
         from webapp.store import database_url_from_config
 
-        schedule_store = PostgresScheduleStore(database_url_from_config(config, workspace))
+        schedule_store = PostgresScheduleStore(
+            database_url_from_config(config, workspace),
+            user_id=_workspace_user_id(workspace),
+        )
     return SchedulerService(
         store_path=workspace / "schedules.json",
         push_tool=push_tool,

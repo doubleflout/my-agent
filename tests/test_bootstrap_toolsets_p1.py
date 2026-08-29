@@ -13,7 +13,7 @@ from bootstrap.toolsets.protocol import (
     ToolsetRegistrationResult,
     build_registration_result,
 )
-from bootstrap.toolsets.schedule import SchedulerToolsetProvider
+from bootstrap.toolsets.schedule import SchedulerToolsetProvider, build_scheduler
 from bootstrap.tools import build_registered_tools
 from bus.event_bus import EventBus
 
@@ -38,6 +38,32 @@ def test_scheduler_toolset_provider_registers_expected_tools(tmp_path: Path):
         "cancel_schedule",
     }
     assert result.always_on_names == []
+
+
+def test_build_scheduler_scopes_postgres_store_to_workspace_user(monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+
+    class _Store:
+        def __init__(self, database_url: str, *, user_id: str | None = None) -> None:
+            captured["database_url"] = database_url
+            captured["user_id"] = user_id
+
+    monkeypatch.setattr("bootstrap.toolsets.schedule.PostgresScheduleStore", _Store)
+    config = SimpleNamespace(
+        storage=SimpleNamespace(
+            backend="postgres",
+            postgres=SimpleNamespace(database_url="postgresql+psycopg://test/db"),
+        )
+    )
+
+    scheduler = build_scheduler(
+        tmp_path / "workspace" / "users" / "user-1",
+        cast(Any, SimpleNamespace()),
+        config=config,
+    )
+
+    assert scheduler.schedule_store is not None
+    assert captured["user_id"] == "user-1"
 
 
 def test_build_registered_tools_uses_toolset_providers(monkeypatch, tmp_path: Path):
