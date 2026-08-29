@@ -425,7 +425,6 @@ def create_web_app(
             )
             init_user_workspace(
                 workspace_resolver.for_user(user.id),
-                config=app_config,
             )
             web_store.ensure_default_proactive_session(user_id=user.id)
         except DuplicateEmailError as exc:

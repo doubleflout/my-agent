@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import threading
-import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -35,12 +34,6 @@ from memory2.store import (
 
 logger = logging.getLogger(__name__)
 
-_UUID_NAMESPACE = uuid.UUID("e7c31773-90fd-42a3-9e1d-2698aa6ec3d7")
-
-
-def _deterministic_uuid(name: str) -> str:
-    return str(uuid.uuid5(_UUID_NAMESPACE, name))
-
 
 def _split_session_key(session_key: str) -> tuple[str, str]:
     if ":" not in session_key:
@@ -55,10 +48,6 @@ def _workspace_user_id(workspace: Path) -> str | None:
         if candidate:
             return candidate
     return None
-
-
-def _stable_workspace_user_id(workspace: Path) -> str:
-    return _deterministic_uuid(f"workspace-user:{workspace.resolve()}")
 
 
 def resolve_memory_user_id(
@@ -82,14 +71,12 @@ def resolve_memory_user_id(
             ).fetchone()
             if row and row.get("user_id"):
                 return str(row["user_id"])
-        row = conn.execute(
-            "SELECT id FROM users ORDER BY created_at ASC LIMIT 1"
-        ).fetchone()
-        if row and row.get("id"):
-            return str(row["id"])
     finally:
         conn.close()
-    return _stable_workspace_user_id(workspace)
+    raise RuntimeError(
+        "cannot resolve memory user_id: workspace is not under users/<user_id> "
+        "and no sessions.user_id mapping was found"
+    )
 
 
 def _schema_sql() -> str:
@@ -180,17 +167,15 @@ class PostgresMemoryStore:
         self._conn.commit()
 
     def _ensure_user_row(self) -> None:
-        email = f"workspace-{self.user_id}@local.akashic"
-        display_name = f"Workspace {self.workspace.name}"
-        self._conn.execute(
-            """
-            INSERT INTO users(id, email, password_hash, display_name)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT(id) DO NOTHING
-            """,
-            (self.user_id, email, "external:memory2-postgres", display_name),
-        )
-        self._conn.commit()
+        row = self._conn.execute(
+            "SELECT 1 FROM users WHERE id = %s",
+            (self.user_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                f"cannot initialize memory2 postgres store: user_id {self.user_id!r} "
+                "does not exist in users"
+            )
 
     def _rollback_if_needed(self) -> None:
         try:
