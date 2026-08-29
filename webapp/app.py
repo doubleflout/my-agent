@@ -28,6 +28,7 @@ from webapp.schemas import (
     MessageSourceResponse,
     RegisterRequest,
     ScheduleResponse,
+    SkillResponse,
     TokenResponse,
     UpdateScheduleRequest,
     UserResponse,
@@ -199,6 +200,33 @@ def create_web_app(
             run_count=int(raw.get("run_count") or 0),
             action_preview=action_preview,
         )
+
+    def skill_to_response(skill) -> SkillResponse:
+        return SkillResponse(
+            id=skill.id,
+            name=skill.name,
+            title=skill.title,
+            description=skill.description,
+            skill_type=skill.skill_type,
+            scope=skill.scope,
+            user_id=skill.user_id,
+            source=skill.source,
+            relative_path=skill.relative_path,
+            entry_file=skill.entry_file,
+            metadata=skill.metadata,
+            enabled=skill.enabled,
+            created_at=skill.created_at,
+            updated_at=skill.updated_at,
+        )
+
+    def load_skills(user_id: str) -> list[SkillResponse]:
+        project_root = Path(__file__).resolve().parent.parent
+        records = web_store.sync_skills_from_filesystem(
+            user_id=user_id,
+            user_workspace=workspace_resolver.for_user(user_id),
+            global_skills_dir=project_root / "skills",
+        )
+        return [skill_to_response(record) for record in records]
 
     def load_schedules_from_json(user_id: str) -> list[ScheduleResponse]:
         path = workspace_resolver.for_user(user_id) / "schedules.json"
@@ -449,6 +477,12 @@ def create_web_app(
         user: UserRecord = Depends(get_current_user),
     ) -> list[ScheduleResponse]:
         return load_schedules(user.id)
+
+    @app.get("/api/skills", response_model=list[SkillResponse])
+    async def list_skills(
+        user: UserRecord = Depends(get_current_user),
+    ) -> list[SkillResponse]:
+        return load_skills(user.id)
 
     @app.patch("/api/schedules/{schedule_id}", response_model=ScheduleResponse)
     async def patch_schedule(

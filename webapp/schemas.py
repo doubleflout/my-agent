@@ -83,6 +83,23 @@ class ScheduleResponse(BaseModel):
     action_preview: str = ""
 
 
+class SkillResponse(BaseModel):
+    id: str
+    name: str
+    title: str | None = None
+    description: str
+    skill_type: str
+    scope: str
+    user_id: str | None = None
+    source: str
+    relative_path: str
+    entry_file: str
+    metadata: dict[str, Any]
+    enabled: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+
 class UpdateScheduleRequest(BaseModel):
     enabled: bool
 

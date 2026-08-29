@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -97,6 +98,24 @@ class ProactiveSessionRecord:
     updated_at: datetime
 
 
+@dataclass(frozen=True)
+class SkillRecord:
+    id: str
+    name: str
+    title: str | None
+    description: str
+    skill_type: str
+    scope: str
+    user_id: str | None
+    source: str
+    relative_path: str
+    entry_file: str
+    metadata: dict[str, Any]
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
 class DuplicateEmailError(ValueError):
     pass
 
@@ -185,6 +204,26 @@ proactive_sessions = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
+skills = Table(
+    "skills",
+    metadata,
+    Column("id", Uuid(as_uuid=False), primary_key=True),
+    Column("name", Text, nullable=False),
+    Column("title", Text),
+    Column("description", Text, nullable=False),
+    Column("skill_type", Text, nullable=False, default="normal"),
+    Column("scope", Text, nullable=False, default="global"),
+    Column("user_id", Uuid(as_uuid=False), ForeignKey("users.id")),
+    Column("source", Text, nullable=False, default="filesystem"),
+    Column("relative_path", Text, nullable=False),
+    Column("entry_file", Text, nullable=False, default="SKILL.md"),
+    Column("metadata_json", JSON, nullable=False, default=dict),
+    Column("enabled", Boolean, nullable=False, default=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("scope", "user_id", "skill_type", "name", name="ux_skills_scope_user_type_name"),
+)
+
 
 def _web_session_key(user_id: str, conversation_id: str) -> str:
     return f"web:{user_id}:{conversation_id}"
@@ -217,6 +256,43 @@ def database_url_from_config(config: Any | None, workspace: Path) -> str:
     password = quote_plus(str(getattr(pg, "password", "") or ""))
     auth = user if not password else f"{user}:{password}"
     return f"postgresql+psycopg://{auth}@{host}:{port}/{database}"
+
+
+def _skill_uuid(*parts: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "akashic:skill:" + ":".join(parts)))
+
+
+def _parse_skill_frontmatter(path: Path) -> dict[str, Any]:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except Exception:
+        return {}
+    if not content.startswith("---"):
+        return {}
+    match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
+    if match is None:
+        return {}
+    metadata: dict[str, Any] = {}
+    for line in match.group(1).splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        metadata[key.strip()] = value.strip().strip('"').strip("'")
+    return metadata
+
+
+def _scan_skill_dirs(root: Path) -> list[tuple[Path, dict[str, Any]]]:
+    if not root.exists():
+        return []
+    rows: list[tuple[Path, dict[str, Any]]] = []
+    for skill_dir in sorted(root.iterdir()):
+        if not skill_dir.is_dir():
+            continue
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_file.exists():
+            continue
+        rows.append((skill_dir, _parse_skill_frontmatter(skill_file)))
+    return rows
 
 
 class WebStore:
@@ -316,6 +392,110 @@ class WebStore:
         with self.engine.connect() as conn:
             row = conn.execute(select(users).where(users.c.id == user_id)).mappings().first()
         return self._user_from_row(row) if row else None
+
+    def sync_skills_from_filesystem(
+        self,
+        *,
+        user_id: str,
+        user_workspace: Path,
+        global_skills_dir: Path,
+    ) -> list[SkillRecord]:
+        now = utcnow()
+        candidates: list[dict[str, Any]] = []
+
+        def add_candidates(
+            *,
+            root: Path,
+            scope: str,
+            skill_type: str,
+            owner_id: str | None,
+            relative_prefix: str,
+            skip_names: set[str] | None = None,
+        ) -> None:
+            for skill_dir, meta in _scan_skill_dirs(root):
+                name = str(meta.get("name") or skill_dir.name).strip() or skill_dir.name
+                if skip_names and name in skip_names:
+                    continue
+                description = str(meta.get("description") or name).strip()
+                candidates.append(
+                    {
+                        "id": _skill_uuid(scope, owner_id or "global", skill_type, name),
+                        "name": name,
+                        "title": str(meta.get("title") or "") or None,
+                        "description": description,
+                        "skill_type": skill_type,
+                        "scope": scope,
+                        "user_id": owner_id,
+                        "source": "filesystem",
+                        "relative_path": f"{relative_prefix}/{skill_dir.name}".replace("\\", "/"),
+                        "entry_file": "SKILL.md",
+                        "metadata_json": meta,
+                        "enabled": True,
+                        "created_at": now,
+                        "updated_at": now,
+                    }
+                )
+
+        global_names = {
+            str(meta.get("name") or skill_dir.name).strip() or skill_dir.name
+            for skill_dir, meta in _scan_skill_dirs(global_skills_dir)
+        }
+        add_candidates(
+            root=global_skills_dir,
+            scope="global",
+            skill_type="normal",
+            owner_id=None,
+            relative_prefix="skills",
+        )
+        add_candidates(
+            root=user_workspace / "skills",
+            scope="user",
+            skill_type="normal",
+            owner_id=user_id,
+            relative_prefix="skills",
+            skip_names=global_names,
+        )
+        add_candidates(
+            root=user_workspace / "drift" / "skills",
+            scope="user",
+            skill_type="drift",
+            owner_id=user_id,
+            relative_prefix="drift/skills",
+        )
+
+        with self._begin() as conn:
+            for row in candidates:
+                existing = conn.execute(select(skills.c.id).where(skills.c.id == row["id"])).first()
+                if existing:
+                    conn.execute(
+                        skills.update()
+                        .where(skills.c.id == row["id"])
+                        .values(
+                            title=row["title"],
+                            description=row["description"],
+                            source=row["source"],
+                            relative_path=row["relative_path"],
+                            entry_file=row["entry_file"],
+                            metadata_json=row["metadata_json"],
+                            enabled=row["enabled"],
+                            updated_at=now,
+                        )
+                    )
+                else:
+                    conn.execute(skills.insert().values(**row))
+        return self.list_skills(user_id=user_id)
+
+    def list_skills(self, *, user_id: str) -> list[SkillRecord]:
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                select(skills)
+                .where(
+                    (skills.c.scope == "global")
+                    | ((skills.c.scope == "user") & (skills.c.user_id == user_id))
+                )
+                .order_by(skills.c.scope.asc(), skills.c.skill_type.asc(), skills.c.name.asc())
+            ).mappings().all()
+        return [self._skill_from_row(row) for row in rows]
 
     def create_conversation(self, *, user_id: str, title: str | None) -> ConversationRecord:
         cid = str(uuid.uuid4())
@@ -720,6 +900,35 @@ class WebStore:
             last_tick_at=row["last_tick_at"],
             next_tick_at=row["next_tick_at"],
             interval_seconds=int(row["interval_seconds"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _skill_from_row(row: Any) -> SkillRecord:
+        raw_meta = row["metadata_json"] or {}
+        if isinstance(raw_meta, str):
+            try:
+                meta = json.loads(raw_meta)
+            except Exception:
+                meta = {}
+        elif isinstance(raw_meta, dict):
+            meta = dict(raw_meta)
+        else:
+            meta = {}
+        return SkillRecord(
+            id=str(row["id"]),
+            name=str(row["name"]),
+            title=str(row["title"]) if row["title"] else None,
+            description=str(row["description"] or ""),
+            skill_type=str(row["skill_type"]),
+            scope=str(row["scope"]),
+            user_id=str(row["user_id"]) if row["user_id"] else None,
+            source=str(row["source"]),
+            relative_path=str(row["relative_path"]),
+            entry_file=str(row["entry_file"]),
+            metadata=meta,
+            enabled=bool(row["enabled"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

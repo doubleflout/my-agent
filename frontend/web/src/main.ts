@@ -25,6 +25,7 @@ import {
 } from "ant-design-vue";
 import {
   ApiOutlined,
+  AppstoreOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
   LoginOutlined,
@@ -42,7 +43,7 @@ import "ant-design-vue/dist/reset.css";
 import "./style.css";
 
 type AuthMode = "login" | "register";
-type MainView = "chat" | "sources" | "schedules";
+type MainView = "chat" | "sources" | "schedules" | "skills";
 type User = { id: string; email: string; display_name: string | null };
 type Conversation = { id: string; title: string; session_key?: string | null; updated_at: string };
 type MessageSource = {
@@ -69,6 +70,22 @@ type ScheduleItem = {
   run_count: number;
   action_preview: string;
 };
+type SkillItem = {
+  id: string;
+  name: string;
+  title?: string | null;
+  description: string;
+  skill_type: string;
+  scope: string;
+  user_id?: string | null;
+  source: string;
+  relative_path: string;
+  entry_file: string;
+  metadata: Record<string, unknown>;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
 type Message = {
   id: string;
   conversation_id: string;
@@ -94,6 +111,7 @@ const App = defineComponent({
     const proactiveConversation = ref<Conversation | null>(null);
     const sources = ref<MessageSource[]>([]);
     const scheduledJobs = ref<ScheduleItem[]>([]);
+    const skills = ref<SkillItem[]>([]);
     const activeId = ref("");
     const mainView = ref<MainView>("chat");
     const messages = ref<Message[]>([]);
@@ -104,6 +122,7 @@ const App = defineComponent({
     const conversationLoading = ref(false);
     const sourcesLoading = ref(false);
     const schedulesLoading = ref(false);
+    const skillsLoading = ref(false);
     const togglingScheduleIds = ref<Set<string>>(new Set());
     const error = ref("");
     const messagePane = ref<HTMLElement | null>(null);
@@ -117,6 +136,7 @@ const App = defineComponent({
     const authTitle = computed(() => (mode.value === "login" ? "欢迎回来" : "创建账号"));
     const enabledSourceCount = computed(() => sources.value.filter((item) => item.enabled).length);
     const enabledScheduleCount = computed(() => scheduledJobs.value.filter((item) => item.enabled).length);
+    const enabledSkillCount = computed(() => skills.value.filter((item) => item.enabled).length);
 
     function authedHeaders(extra?: HeadersInit) {
       const headers = new Headers(extra);
@@ -178,6 +198,15 @@ const App = defineComponent({
       }
     }
 
+    async function refreshSkills() {
+      skillsLoading.value = true;
+      try {
+        skills.value = await request<SkillItem[]>("/api/skills");
+      } finally {
+        skillsLoading.value = false;
+      }
+    }
+
     async function toggleSchedule(job: ScheduleItem) {
       const nextEnabled = !job.enabled;
       togglingScheduleIds.value = new Set([...togglingScheduleIds.value, job.id]);
@@ -214,6 +243,7 @@ const App = defineComponent({
         await refreshConversations();
         await refreshSources();
         await refreshSchedules();
+        await refreshSkills();
       } catch {
         localStorage.removeItem(TOKEN_KEY);
         token.value = "";
@@ -243,6 +273,7 @@ const App = defineComponent({
         await refreshConversations();
         await refreshSources();
         await refreshSchedules();
+        await refreshSkills();
       } catch (err) {
         setError(err);
       } finally {
@@ -288,6 +319,15 @@ const App = defineComponent({
       }
     }
 
+    async function showSkills() {
+      mainView.value = "skills";
+      try {
+        await refreshSkills();
+      } catch (err) {
+        setError(err);
+      }
+    }
+
     function formatScheduleTime(value?: string | null) {
       if (!value) return "未设置";
       const date = new Date(value);
@@ -311,6 +351,19 @@ const App = defineComponent({
         soft: "AI 生成",
       };
       return `${triggerMap[item.trigger] || item.trigger || "任务"} / ${tierMap[item.tier] || item.tier || "执行"}`;
+    }
+
+    function skillKindText(item: SkillItem) {
+      const scopeMap: Record<string, string> = {
+        global: "全局",
+        user: "用户",
+      };
+      const typeMap: Record<string, string> = {
+        normal: "普通",
+        drift: "后台",
+        tool: "工具",
+      };
+      return `${scopeMap[item.scope] || item.scope} / ${typeMap[item.skill_type] || item.skill_type}`;
     }
 
     async function sendMessage() {
@@ -549,6 +602,14 @@ const App = defineComponent({
             h("span", { class: "conversation-title" }, "定时任务"),
             h("span", { class: "source-count" }, String(enabledScheduleCount.value)),
           ]),
+          h("button", {
+            class: ["source-entry", mainView.value === "skills" ? "active" : ""],
+            onClick: () => void showSkills(),
+          }, [
+            h("span", { class: "conversation-icon" }, [h(AppstoreOutlined)]),
+            h("span", { class: "conversation-title" }, "技能"),
+            h("span", { class: "source-count" }, String(enabledSkillCount.value)),
+          ]),
         ]),
       ]);
     }
@@ -626,9 +687,39 @@ const App = defineComponent({
       ]);
     }
 
+    function renderSkills() {
+      return h("div", { class: "sources-view" }, [
+        skillsLoading.value
+          ? h("div", { class: "empty-chat" }, [h(Spin), h("span", "加载技能")])
+          : skills.value.length === 0
+            ? h("div", { class: "empty-chat" }, [h(Empty, { description: "还没有技能" })])
+            : h("div", { class: "source-list-panel" }, skills.value.map((skill) =>
+                h("article", { key: skill.id, class: "source-row" }, [
+                  h("span", { class: ["source-state", skill.enabled ? "enabled" : "disabled"] }, [
+                    h(skill.enabled ? CheckCircleOutlined : StopOutlined),
+                  ]),
+                  h("div", { class: "source-main" }, [
+                    h("div", { class: "source-title-line" }, [
+                      h("strong", skill.title || skill.name),
+                      h("span", { class: "source-pill" }, skillKindText(skill)),
+                    ]),
+                    skill.description
+                      ? h("p", { class: "source-description" }, skill.description)
+                      : null,
+                    h("div", { class: "source-meta" }, [
+                      h("span", `path: ${skill.relative_path}/${skill.entry_file}`),
+                      h("span", `source: ${skill.source}`),
+                    ]),
+                  ]),
+                ]),
+              )),
+      ]);
+    }
+
     function renderMessages() {
       if (mainView.value === "sources") return renderSources();
       if (mainView.value === "schedules") return renderSchedules();
+      if (mainView.value === "skills") return renderSkills();
       if (!activeId.value) {
         return h("div", { class: "empty-chat" }, [
           h(Empty, { description: "创建或选择一个会话开始聊天" }),
@@ -675,17 +766,23 @@ const App = defineComponent({
                   ? "消息源"
                   : mainView.value === "schedules"
                     ? "定时任务"
-                    : activeConversation.value?.title || "选择会话",
+                    : mainView.value === "skills"
+                      ? "技能"
+                      : activeConversation.value?.title || "选择会话",
               ),
               h(Typography.Text, { type: "secondary" }, () =>
                 mainView.value === "sources"
                   ? `已启用 ${enabledSourceCount.value} 个订阅`
                   : mainView.value === "schedules"
                     ? `已启用 ${enabledScheduleCount.value} 个任务`
-                  : activeId.value ? "当前对话" : "从左侧选择一个对话",
+                    : mainView.value === "skills"
+                      ? `已同步 ${enabledSkillCount.value} 个技能`
+                      : activeId.value ? "当前对话" : "从左侧选择一个对话",
               ),
             ]),
-            busy.value || sourcesLoading.value || schedulesLoading.value ? h(Spin, { size: "small" }) : null,
+            busy.value || sourcesLoading.value || schedulesLoading.value || skillsLoading.value
+              ? h(Spin, { size: "small" })
+              : null,
           ]),
           renderMessages(),
           error.value ? h(Alert, {

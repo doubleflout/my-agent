@@ -259,6 +259,46 @@ async def test_schedules_are_loaded_from_user_workspace(tmp_path):
     ]
 
 
+async def test_skills_endpoint_syncs_global_and_user_workspace_skills(tmp_path):
+    app = make_app(tmp_path)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        token = await register(client, "skills@example.com")
+        me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        user_id = me.json()["id"]
+        user_workspace = tmp_path / "users" / user_id
+        normal_skill = user_workspace / "skills" / "user-normal"
+        normal_skill.mkdir(parents=True)
+        (normal_skill / "SKILL.md").write_text(
+            "---\nname: user-normal\ndescription: 用户普通技能\n---\n\nbody",
+            encoding="utf-8",
+        )
+        drift_skill = user_workspace / "drift" / "skills" / "user-drift"
+        drift_skill.mkdir(parents=True)
+        (drift_skill / "SKILL.md").write_text(
+            "---\nname: user-drift\ndescription: 用户后台任务技能\n---\n\nbody",
+            encoding="utf-8",
+        )
+
+        res = await client.get(
+            "/api/skills",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert res.status_code == 200, res.text
+    rows = res.json()
+    by_name = {row["name"]: row for row in rows}
+    assert by_name["user-normal"]["scope"] == "user"
+    assert by_name["user-normal"]["skill_type"] == "normal"
+    assert by_name["user-normal"]["relative_path"] == "skills/user-normal"
+    assert by_name["user-drift"]["scope"] == "user"
+    assert by_name["user-drift"]["skill_type"] == "drift"
+    assert by_name["user-drift"]["relative_path"] == "drift/skills/user-drift"
+    assert by_name["weather"]["scope"] == "global"
+
+
 async def test_schedule_enabled_can_be_toggled_in_user_workspace(tmp_path):
     app = make_app(tmp_path)
     async with httpx.AsyncClient(
