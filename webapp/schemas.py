@@ -68,6 +68,21 @@ class MessageSourceResponse(BaseModel):
     description: str | None = None
 
 
+class ScheduleResponse(BaseModel):
+    id: str
+    name: str
+    trigger: str
+    tier: str
+    enabled: bool = True
+    fire_at: datetime | None = None
+    timezone: str | None = None
+    channel: str | None = None
+    chat_id: str | None = None
+    session_key: str | None = None
+    run_count: int = 0
+    action_preview: str = ""
+
+
 class MessageResponse(BaseModel):
     id: str
     conversation_id: str

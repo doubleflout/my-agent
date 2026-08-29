@@ -202,6 +202,63 @@ async def test_proactive_sources_are_loaded_from_user_workspace(tmp_path):
     ]
 
 
+async def test_schedules_are_loaded_from_user_workspace(tmp_path):
+    app = make_app(tmp_path)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        token = await register(client, "schedules@example.com")
+        me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        user_id = me.json()["id"]
+        schedule_path = tmp_path / "users" / user_id / "schedules.json"
+        schedule_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "00000000-0000-0000-0000-000000000001",
+                        "name": "每日复盘",
+                        "trigger": "every",
+                        "tier": "soft",
+                        "fire_at": "2026-08-29T09:00:00+08:00",
+                        "timezone": "Asia/Shanghai",
+                        "channel": "web",
+                        "chat_id": "conversation-1",
+                        "session_key": f"web:{user_id}:conversation-1",
+                        "prompt": "根据昨天聊天做复盘",
+                        "run_count": 2,
+                        "enabled": True,
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        res = await client.get(
+            "/api/schedules",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert res.json() == [
+        {
+            "id": "00000000-0000-0000-0000-000000000001",
+            "name": "每日复盘",
+            "trigger": "every",
+            "tier": "soft",
+            "enabled": True,
+            "fire_at": "2026-08-29T09:00:00+08:00",
+            "timezone": "Asia/Shanghai",
+            "channel": "web",
+            "chat_id": "conversation-1",
+            "session_key": f"web:{user_id}:conversation-1",
+            "run_count": 2,
+            "action_preview": "根据昨天聊天做复盘",
+        }
+    ]
+
+
 async def test_conversation_isolation_and_session_key(tmp_path):
     executor = FakeExecutor()
     app = make_app(tmp_path, executor)

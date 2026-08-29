@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 from agent.config_models import Config
 from webapp.agent_executor import AgentExecutor, AgentLoopExecutor
@@ -26,6 +27,7 @@ from webapp.schemas import (
     MessageResponse,
     MessageSourceResponse,
     RegisterRequest,
+    ScheduleResponse,
     TokenResponse,
     UserResponse,
 )
@@ -174,6 +176,96 @@ def create_web_app(
             )
         return sources
 
+    def schedule_to_response(raw: dict[str, Any], *, enabled: bool | None = None) -> ScheduleResponse | None:
+        schedule_id = str(raw.get("id") or "").strip()
+        if not schedule_id:
+            return None
+        prompt = str(raw.get("prompt") or "").strip()
+        message = str(raw.get("message") or "").strip()
+        action_preview = (prompt or message)[:80]
+        name = str(raw.get("name") or "").strip() or schedule_id[:8]
+        return ScheduleResponse(
+            id=schedule_id,
+            name=name,
+            trigger=str(raw.get("trigger") or ""),
+            tier=str(raw.get("tier") or ""),
+            enabled=bool(raw.get("enabled", True) if enabled is None else enabled),
+            fire_at=raw.get("fire_at") or None,
+            timezone=str(raw.get("timezone") or "") or None,
+            channel=str(raw.get("channel") or "") or None,
+            chat_id=str(raw.get("chat_id") or "") or None,
+            session_key=str(raw.get("session_key") or "") or None,
+            run_count=int(raw.get("run_count") or 0),
+            action_preview=action_preview,
+        )
+
+    def load_schedules_from_json(user_id: str) -> list[ScheduleResponse]:
+        path = workspace_resolver.for_user(user_id) / "schedules.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return []
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to read schedules: {exc}") from exc
+        if not isinstance(data, list):
+            return []
+        schedules: list[ScheduleResponse] = []
+        for raw in data:
+            if not isinstance(raw, dict):
+                continue
+            item = schedule_to_response(raw)
+            if item is not None:
+                schedules.append(item)
+        return schedules
+
+    def load_schedules_from_pg(user_id: str) -> list[ScheduleResponse]:
+        inspector = None
+        try:
+            from sqlalchemy import inspect as sa_inspect
+
+            inspector = sa_inspect(web_store.engine)
+            if "schedules" not in set(inspector.get_table_names()):
+                return []
+            with web_store.engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        """
+                        SELECT s.id, s.name, s.enabled, s.session_key, s.spec_json
+                        FROM schedules s
+                        LEFT JOIN sessions ss ON ss.key = s.session_key
+                        WHERE s.user_id = :user_id OR ss.user_id = :user_id
+                        ORDER BY s.updated_at DESC
+                        """
+                    ),
+                    {"user_id": user_id},
+                ).mappings().all()
+        except Exception:
+            return []
+        schedules: list[ScheduleResponse] = []
+        for row in rows:
+            spec = row["spec_json"] or {}
+            if isinstance(spec, str):
+                try:
+                    spec = json.loads(spec)
+                except Exception:
+                    spec = {}
+            if not isinstance(spec, dict):
+                spec = {}
+            spec = dict(spec)
+            spec["id"] = str(row["id"])
+            spec["name"] = str(row["name"] or spec.get("name") or "")
+            spec["session_key"] = str(row["session_key"] or spec.get("session_key") or "")
+            item = schedule_to_response(spec, enabled=bool(row["enabled"]))
+            if item is not None:
+                schedules.append(item)
+        return schedules
+
+    def load_schedules(user_id: str) -> list[ScheduleResponse]:
+        pg_schedules = load_schedules_from_pg(user_id)
+        if pg_schedules:
+            return pg_schedules
+        return load_schedules_from_json(user_id)
+
     def get_current_user(authorization: str | None = Header(default=None)) -> UserRecord:
         if not authorization or not authorization.lower().startswith("bearer "):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing token")
@@ -245,6 +337,12 @@ def create_web_app(
         user: UserRecord = Depends(get_current_user),
     ) -> list[MessageSourceResponse]:
         return load_message_sources(user.id)
+
+    @app.get("/api/schedules", response_model=list[ScheduleResponse])
+    async def list_schedules(
+        user: UserRecord = Depends(get_current_user),
+    ) -> list[ScheduleResponse]:
+        return load_schedules(user.id)
 
     @app.get(
         "/api/conversations/{conversation_id}/messages",

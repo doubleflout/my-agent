@@ -26,6 +26,7 @@ import {
 import {
   ApiOutlined,
   CheckCircleOutlined,
+  ClockCircleOutlined,
   LoginOutlined,
   LogoutOutlined,
   MessageOutlined,
@@ -39,7 +40,7 @@ import "ant-design-vue/dist/reset.css";
 import "./style.css";
 
 type AuthMode = "login" | "register";
-type MainView = "chat" | "sources";
+type MainView = "chat" | "sources" | "schedules";
 type User = { id: string; email: string; display_name: string | null };
 type Conversation = { id: string; title: string; session_key?: string | null; updated_at: string };
 type MessageSource = {
@@ -51,6 +52,20 @@ type MessageSource = {
   get_tool?: string | null;
   ack_tool?: string | null;
   description?: string | null;
+};
+type ScheduleItem = {
+  id: string;
+  name: string;
+  trigger: string;
+  tier: string;
+  enabled: boolean;
+  fire_at?: string | null;
+  timezone?: string | null;
+  channel?: string | null;
+  chat_id?: string | null;
+  session_key?: string | null;
+  run_count: number;
+  action_preview: string;
 };
 type Message = {
   id: string;
@@ -76,6 +91,7 @@ const App = defineComponent({
     const conversations = ref<Conversation[]>([]);
     const proactiveConversation = ref<Conversation | null>(null);
     const sources = ref<MessageSource[]>([]);
+    const scheduledJobs = ref<ScheduleItem[]>([]);
     const activeId = ref("");
     const mainView = ref<MainView>("chat");
     const messages = ref<Message[]>([]);
@@ -85,6 +101,7 @@ const App = defineComponent({
     const authLoading = ref(false);
     const conversationLoading = ref(false);
     const sourcesLoading = ref(false);
+    const schedulesLoading = ref(false);
     const error = ref("");
     const messagePane = ref<HTMLElement | null>(null);
 
@@ -96,6 +113,7 @@ const App = defineComponent({
     const canSend = computed(() => Boolean(draft.value.trim() && activeId.value && !busy.value));
     const authTitle = computed(() => (mode.value === "login" ? "欢迎回来" : "创建账号"));
     const enabledSourceCount = computed(() => sources.value.filter((item) => item.enabled).length);
+    const enabledScheduleCount = computed(() => scheduledJobs.value.filter((item) => item.enabled).length);
 
     function authedHeaders(extra?: HeadersInit) {
       const headers = new Headers(extra);
@@ -148,6 +166,15 @@ const App = defineComponent({
       }
     }
 
+    async function refreshSchedules() {
+      schedulesLoading.value = true;
+      try {
+        scheduledJobs.value = await request<ScheduleItem[]>("/api/schedules");
+      } finally {
+        schedulesLoading.value = false;
+      }
+    }
+
     async function loadMessages(conversationId: string) {
       messages.value = await request<Message[]>(`/api/conversations/${conversationId}/messages`);
       await scrollToBottom();
@@ -163,6 +190,7 @@ const App = defineComponent({
         await refreshProactiveConversation();
         await refreshConversations();
         await refreshSources();
+        await refreshSchedules();
       } catch {
         localStorage.removeItem(TOKEN_KEY);
         token.value = "";
@@ -191,6 +219,7 @@ const App = defineComponent({
         await refreshProactiveConversation();
         await refreshConversations();
         await refreshSources();
+        await refreshSchedules();
       } catch (err) {
         setError(err);
       } finally {
@@ -225,6 +254,40 @@ const App = defineComponent({
       } catch (err) {
         setError(err);
       }
+    }
+
+    async function showSchedules() {
+      mainView.value = "schedules";
+      try {
+        await refreshSchedules();
+      } catch (err) {
+        setError(err);
+      }
+    }
+
+    function formatScheduleTime(value?: string | null) {
+      if (!value) return "未设置";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return new Intl.DateTimeFormat("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(date);
+    }
+
+    function scheduleKindText(item: ScheduleItem) {
+      const triggerMap: Record<string, string> = {
+        at: "定点",
+        after: "延迟",
+        every: "循环",
+      };
+      const tierMap: Record<string, string> = {
+        instant: "固定推送",
+        soft: "AI 生成",
+      };
+      return `${triggerMap[item.trigger] || item.trigger || "任务"} / ${tierMap[item.tier] || item.tier || "执行"}`;
     }
 
     async function sendMessage() {
@@ -311,6 +374,7 @@ const App = defineComponent({
       conversations.value = [];
       proactiveConversation.value = null;
       sources.value = [];
+      scheduledJobs.value = [];
       messages.value = [];
       activeId.value = "";
       mainView.value = "chat";
@@ -454,6 +518,14 @@ const App = defineComponent({
             h("span", { class: "conversation-title" }, "消息源"),
             h("span", { class: "source-count" }, String(enabledSourceCount.value)),
           ]),
+          h("button", {
+            class: ["source-entry", mainView.value === "schedules" ? "active" : ""],
+            onClick: () => void showSchedules(),
+          }, [
+            h("span", { class: "conversation-icon" }, [h(ClockCircleOutlined)]),
+            h("span", { class: "conversation-title" }, "定时任务"),
+            h("span", { class: "source-count" }, String(enabledScheduleCount.value)),
+          ]),
         ]),
       ]);
     }
@@ -488,8 +560,41 @@ const App = defineComponent({
       ]);
     }
 
+    function renderSchedules() {
+      return h("div", { class: "sources-view" }, [
+        schedulesLoading.value
+          ? h("div", { class: "empty-chat" }, [h(Spin), h("span", "加载定时任务")])
+          : scheduledJobs.value.length === 0
+            ? h("div", { class: "empty-chat" }, [h(Empty, { description: "还没有定时任务" })])
+            : h("div", { class: "source-list-panel" }, scheduledJobs.value.map((job) =>
+                h("article", { key: job.id, class: "source-row" }, [
+                  h("span", { class: ["source-state", job.enabled ? "enabled" : "disabled"] }, [
+                    h(job.enabled ? CheckCircleOutlined : StopOutlined),
+                  ]),
+                  h("div", { class: "source-main" }, [
+                    h("div", { class: "source-title-line" }, [
+                      h("strong", job.name || job.id),
+                      h("span", { class: "source-pill" }, scheduleKindText(job)),
+                    ]),
+                    job.action_preview
+                      ? h("p", { class: "source-description" }, job.action_preview)
+                      : null,
+                    h("div", { class: "source-meta" }, [
+                      h("span", `下次: ${formatScheduleTime(job.fire_at)}`),
+                      job.timezone ? h("span", `tz: ${job.timezone}`) : null,
+                      job.channel ? h("span", `channel: ${job.channel}`) : null,
+                      job.chat_id ? h("span", `chat: ${job.chat_id}`) : null,
+                      h("span", `运行: ${job.run_count} 次`),
+                    ].filter(Boolean)),
+                  ]),
+                ]),
+              )),
+      ]);
+    }
+
     function renderMessages() {
       if (mainView.value === "sources") return renderSources();
+      if (mainView.value === "schedules") return renderSchedules();
       if (!activeId.value) {
         return h("div", { class: "empty-chat" }, [
           h(Empty, { description: "创建或选择一个会话开始聊天" }),
@@ -532,15 +637,21 @@ const App = defineComponent({
           h("header", { class: "chat-header" }, [
             h("div", [
               h(Typography.Title, { level: 3 }, () =>
-                mainView.value === "sources" ? "消息源" : activeConversation.value?.title || "选择会话",
+                mainView.value === "sources"
+                  ? "消息源"
+                  : mainView.value === "schedules"
+                    ? "定时任务"
+                    : activeConversation.value?.title || "选择会话",
               ),
               h(Typography.Text, { type: "secondary" }, () =>
                 mainView.value === "sources"
                   ? `已启用 ${enabledSourceCount.value} 个订阅`
+                  : mainView.value === "schedules"
+                    ? `已启用 ${enabledScheduleCount.value} 个任务`
                   : activeId.value ? "当前对话" : "从左侧选择一个对话",
               ),
             ]),
-            busy.value || sourcesLoading.value ? h(Spin, { size: "small" }) : null,
+            busy.value || sourcesLoading.value || schedulesLoading.value ? h(Spin, { size: "small" }) : null,
           ]),
           renderMessages(),
           error.value ? h(Alert, {
