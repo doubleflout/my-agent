@@ -1,8 +1,8 @@
-#  Agent
+# Agent
 
 心有灵犀 Agent 是一个面向长期陪伴和自主执行场景的个人 Agent 系统。它不仅能处理被动对话，还支持长期记忆、插件扩展、工具按需暴露、定时任务、主动消息、后台 Drift 任务和多 Subagent 协作。
 
-项目重点不只是“调用一次大模型”，而是把 Agent 运行时拆成可观察、可扩展、可恢复的后端系统。
+项目重点不只是“调用一次大模型”，而是把 Agent 运行时拆成可观察、可扩展的后端系统。
 
 ## 核心能力
 
@@ -108,12 +108,13 @@ BeforeTurn
 记忆系统分成两层：
 
 1. **Markdown 记忆层**
+   
    - `MEMORY.md`：长期画像和规则
    - `HISTORY.md`：时间线事件
    - `PENDING.md`：待归档候选记忆
    - `RECENT_CONTEXT.md`：近期上下文摘要
-
 2. **memory2 语义记忆层**
+   
    - `event`：具体事件
    - `profile`：用户事实和状态
    - `preference`：服务偏好
@@ -238,3 +239,4 @@ pytest tests/
 - [_handbook/drift-guide.md](./_handbook/drift-guide.md)
 - [_handbook/memory-markdown.md](./_handbook/memory-markdown.md)
 - [_handbook/plugins-tutorial.md](./_handbook/plugins-tutorial.md)
+

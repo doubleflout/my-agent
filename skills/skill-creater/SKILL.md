@@ -1,6 +1,6 @@
 ---
 name: skill-creater
-description: 创建或改写 akashic-bot 技能（SKILL.md）。当用户要求新建技能、适配现有技能到当前格式、或修改技能内容时使用。
+description: 创建、改写或删除 akashic-bot 技能（SKILL.md）。当用户要求新建技能、适配现有技能到当前格式、修改技能内容、删除技能、废弃技能或移除 skill 业务记录时使用。
 ---
 
 # Skill 创建指南
@@ -64,8 +64,6 @@ metadata: {"akashic": {"always": false, "requires": {"bins": ["curl"], "env": ["
    - `name`、`description` 与 SKILL.md frontmatter 保持一致
 5. 验证：`requires.bins` 里的命令是否正确
 
-删除或废弃用户技能时，不要直接操作数据库；确认后调用 `delete_skill_record` 删除业务表记录，文件是否保留按用户要求处理。
-
 ## 改写已有技能
 
 改写时重点检查：
@@ -73,3 +71,17 @@ metadata: {"akashic": {"always": false, "requires": {"bins": ["curl"], "env": ["
 - `requires.bins` 是否列全了依赖
 - 正文是否有指向不存在脚本的引用（如 `init_skill.py`）
 - 安装命令是否适配当前系统（Linux 用 `uv`/`pacman`/`apt`，而非 `brew`）
+
+## 删除/废弃技能流程
+
+当用户要求删除、废弃、下线、移除某个普通用户技能时：
+
+1. 先确认目标技能名和类型，本指南只处理普通用户技能，`skill_type="normal"`。
+2. 不要直接写 SQL，也不要让用户提供 `user_id`；业务隔离由工具运行上下文处理。
+3. 调用 `delete_skill_record` 删除当前用户的 skills 业务表记录：
+   - `name` 使用目标技能名
+   - `skill_type` 使用 `normal`
+4. 文件是否删除按用户表达决定：
+   - 用户只说“下线/废弃/前端不展示”，只删除业务表记录，保留 `skills/{skill-name}/SKILL.md`
+   - 用户明确说“删除文件/彻底删除”，再删除或移动 `skills/{skill-name}/` 下的文件
+5. 回复用户时说明：业务表记录已删除；如果保留了文件，也要说明文件仍在 workspace 中。
