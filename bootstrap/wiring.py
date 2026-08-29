@@ -13,6 +13,7 @@ from bootstrap.toolsets.memory import MemoryToolsetProvider
 from bootstrap.toolsets.meta import CommonMetaToolsetProvider, SpawnToolsetProvider
 from bootstrap.toolsets.protocol import ToolsetProvider
 from bootstrap.toolsets.schedule import SchedulerToolsetProvider
+from bootstrap.toolsets.skills import SkillRecordsToolsetProvider
 from core.memory.plugin import MemoryPlugin
 
 if TYPE_CHECKING:
@@ -44,6 +45,7 @@ _CONTEXT_WIRING: dict[str, ContextFactory] = {
 _TOOLSET_WIRING: dict[str, ToolsetProviderFactory] = {
     "spawn": SpawnToolsetProvider,
     "schedule": SchedulerToolsetProvider,
+    "skills": SkillRecordsToolsetProvider,
     "mcp": McpToolsetProvider,
 }
 

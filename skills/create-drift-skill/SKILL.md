@@ -28,6 +28,10 @@ description: <一句话描述>
 ```
 
 4. 正文只写完成当前任务真正需要的最小流程，避免空泛模板。
+5. 创建或更新 `SKILL.md` 后，调用 `upsert_skill_record` 同步业务表：
+   - `skill_type="drift"`
+   - `relative_path="drift/skills/<skill_name>"`
+   - `name`、`description` 与 SKILL.md frontmatter 保持一致
 
 ## 约束
 
@@ -35,3 +39,4 @@ description: <一句话描述>
 - 不要为了一个一次性动作创建 skill
 - 如果只是当前 skill 的进展变化，优先更新它的 working files 或 state，而不是新建 skill
 - 结束流程必须写清 `finish_drift.message_result`：已成功推送写 `sent`，静默结束写 `silent`
+- 删除或废弃 drift skill 时，不要直接操作数据库；确认后调用 `delete_skill_record` 删除业务表记录

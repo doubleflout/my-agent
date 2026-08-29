@@ -497,6 +497,79 @@ class WebStore:
             ).mappings().all()
         return [self._skill_from_row(row) for row in rows]
 
+    def upsert_skill_record(
+        self,
+        *,
+        user_id: str,
+        name: str,
+        skill_type: str,
+        scope: str = "user",
+        title: str | None = None,
+        description: str = "",
+        source: str = "filesystem",
+        relative_path: str,
+        entry_file: str = "SKILL.md",
+        metadata: dict[str, Any] | None = None,
+        enabled: bool = True,
+    ) -> SkillRecord:
+        clean_name = name.strip()
+        clean_scope = scope.strip() or "user"
+        owner_id = user_id if clean_scope == "user" else None
+        now = utcnow()
+        row_id = _skill_uuid(clean_scope, owner_id or "global", skill_type, clean_name)
+        values = {
+            "id": row_id,
+            "name": clean_name,
+            "title": title,
+            "description": description.strip() or clean_name,
+            "skill_type": skill_type.strip() or "normal",
+            "scope": clean_scope,
+            "user_id": owner_id,
+            "source": source.strip() or "filesystem",
+            "relative_path": relative_path.strip().replace("\\", "/"),
+            "entry_file": entry_file.strip() or "SKILL.md",
+            "metadata_json": metadata or {},
+            "enabled": bool(enabled),
+            "created_at": now,
+            "updated_at": now,
+        }
+        with self._begin() as conn:
+            existing = conn.execute(select(skills.c.id).where(skills.c.id == row_id)).first()
+            if existing:
+                conn.execute(
+                    skills.update()
+                    .where(skills.c.id == row_id)
+                    .values(
+                        title=values["title"],
+                        description=values["description"],
+                        source=values["source"],
+                        relative_path=values["relative_path"],
+                        entry_file=values["entry_file"],
+                        metadata_json=values["metadata_json"],
+                        enabled=values["enabled"],
+                        updated_at=now,
+                    )
+                )
+            else:
+                conn.execute(skills.insert().values(**values))
+            row = conn.execute(select(skills).where(skills.c.id == row_id)).mappings().one()
+        return self._skill_from_row(row)
+
+    def delete_skill_record(
+        self,
+        *,
+        user_id: str,
+        name: str,
+        skill_type: str = "normal",
+        scope: str = "user",
+    ) -> bool:
+        clean_scope = scope.strip() or "user"
+        owner_id = user_id if clean_scope == "user" else None
+        row_id = _skill_uuid(clean_scope, owner_id or "global", skill_type, name.strip())
+        with self._begin() as conn:
+            result = conn.execute(skills.delete().where(skills.c.id == row_id))
+        return bool(result.rowcount and result.rowcount > 0)
+
     def create_conversation(self, *, user_id: str, title: str | None) -> ConversationRecord:
         cid = str(uuid.uuid4())
         now = utcnow()

@@ -107,6 +107,7 @@ class WiringConfig:
             "meta_common",
             "spawn",
             "schedule",
+            "skills",
             "mcp",
         ]
     )

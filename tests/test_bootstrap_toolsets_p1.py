@@ -14,6 +14,7 @@ from bootstrap.toolsets.protocol import (
     build_registration_result,
 )
 from bootstrap.toolsets.schedule import SchedulerToolsetProvider, build_scheduler
+from bootstrap.toolsets.skills import SkillRecordsToolsetProvider
 from bootstrap.tools import build_registered_tools
 from bus.event_bus import EventBus
 
@@ -38,6 +39,38 @@ def test_scheduler_toolset_provider_registers_expected_tools(tmp_path: Path):
         "cancel_schedule",
     }
     assert result.always_on_names == []
+
+
+def test_skill_records_toolset_registers_deferred_user_tools(tmp_path: Path):
+    registry = ToolRegistry()
+    workspace = tmp_path / "workspace" / "users" / "user-1"
+    workspace.mkdir(parents=True)
+    config = SimpleNamespace(
+        storage=SimpleNamespace(backend="sqlite"),
+    )
+
+    result = SkillRecordsToolsetProvider().register(
+        registry,
+        cast(Any, SimpleNamespace(config=config, workspace=workspace)),
+    )
+
+    assert set(result.tool_names) == {"upsert_skill_record", "delete_skill_record"}
+    assert result.always_on_names == []
+    assert set(cast(dict[str, list[str]], registry.get_deferred_names()["builtin"])) >= {
+        "upsert_skill_record",
+        "delete_skill_record",
+    }
+
+
+def test_skill_records_toolset_skips_non_user_workspace(tmp_path: Path):
+    registry = ToolRegistry()
+
+    result = SkillRecordsToolsetProvider().register(
+        registry,
+        cast(Any, SimpleNamespace(config=SimpleNamespace(), workspace=tmp_path / "workspace")),
+    )
+
+    assert result.tool_names == []
 
 
 def test_build_scheduler_scopes_postgres_store_to_workspace_user(monkeypatch, tmp_path: Path):
@@ -97,6 +130,11 @@ def test_build_registered_tools_uses_toolset_providers(monkeypatch, tmp_path: Pa
             calls.append("schedule")
             return ToolsetRegistrationResult(source_name="schedule")
 
+    class _SkillsProvider:
+        def register(self, registry, deps):
+            calls.append("skills")
+            return ToolsetRegistrationResult(source_name="skills")
+
     class _McpProvider:
         def register(self, registry, deps):
             calls.append("mcp")
@@ -115,6 +153,7 @@ def test_build_registered_tools_uses_toolset_providers(monkeypatch, tmp_path: Pa
             "meta_common": _MetaProvider(readonly_tools),
             "spawn": _SpawnProvider(),
             "schedule": _ScheduleProvider(),
+            "skills": _SkillsProvider(),
             "mcp": _McpProvider(),
         }[name],
     )
@@ -143,7 +182,7 @@ def test_build_registered_tools_uses_toolset_providers(monkeypatch, tmp_path: Pa
         )
     )
 
-    assert calls == ["memory", "meta", "spawn", "schedule", "mcp"]
+    assert calls == ["memory", "meta", "spawn", "schedule", "skills", "mcp"]
     assert push_tool is not None
     assert scheduler is not None
     assert mcp_registry is not None

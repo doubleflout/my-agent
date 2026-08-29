@@ -58,7 +58,13 @@ metadata: {"akashic": {"always": false, "requires": {"bins": ["curl"], "env": ["
 1. 确认技能名称和保存位置（workspace 还是内置）
 2. 用 `write_file` 写入 SKILL.md
 3. 如有辅助脚本，写入 `scripts/` 目录
-4. 验证：`requires.bins` 里的命令是否正确
+4. 调用 `upsert_skill_record` 同步业务表：
+   - 普通用户技能使用 `skill_type="normal"`
+   - `relative_path` 使用 `skills/{skill-name}`
+   - `name`、`description` 与 SKILL.md frontmatter 保持一致
+5. 验证：`requires.bins` 里的命令是否正确
+
+删除或废弃用户技能时，不要直接操作数据库；确认后调用 `delete_skill_record` 删除业务表记录，文件是否保留按用户要求处理。
 
 ## 改写已有技能
 
