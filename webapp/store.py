@@ -477,7 +477,6 @@ class WebStore:
                             relative_path=row["relative_path"],
                             entry_file=row["entry_file"],
                             metadata_json=row["metadata_json"],
-                            enabled=row["enabled"],
                             updated_at=now,
                         )
                     )
@@ -496,6 +495,32 @@ class WebStore:
                 .order_by(skills.c.scope.asc(), skills.c.skill_type.asc(), skills.c.name.asc())
             ).mappings().all()
         return [self._skill_from_row(row) for row in rows]
+
+    def set_user_skill_enabled(
+        self,
+        *,
+        user_id: str,
+        skill_id: str,
+        enabled: bool,
+    ) -> SkillRecord | None:
+        now = utcnow()
+        with self._begin() as conn:
+            row = conn.execute(
+                select(skills).where(
+                    skills.c.id == skill_id,
+                    skills.c.scope == "user",
+                    skills.c.user_id == user_id,
+                )
+            ).mappings().first()
+            if row is None:
+                return None
+            conn.execute(
+                skills.update()
+                .where(skills.c.id == skill_id)
+                .values(enabled=bool(enabled), updated_at=now)
+            )
+            updated = conn.execute(select(skills).where(skills.c.id == skill_id)).mappings().one()
+        return self._skill_from_row(updated)
 
     def upsert_skill_record(
         self,

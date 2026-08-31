@@ -19,6 +19,7 @@ from webapp.agent_executor import AgentExecutor, AgentLoopExecutor
 from webapp.proactive_scheduler import WebProactiveRunner, WebProactiveScheduler
 from webapp.rate_limit import InMemoryRateLimiter, RateLimitExceeded, RateLimiter, RedisRateLimiter
 from webapp.schemas import (
+    BackgroundTaskResponse,
     ConversationResponse,
     CreateConversationRequest,
     CreateMessageRequest,
@@ -31,6 +32,7 @@ from webapp.schemas import (
     SkillResponse,
     TokenResponse,
     UpdateScheduleRequest,
+    UpdateSkillRequest,
     UserResponse,
 )
 from bootstrap.init_workspace import init_user_workspace
@@ -227,6 +229,64 @@ def create_web_app(
             global_skills_dir=project_root / "skills",
         )
         return [skill_to_response(record) for record in records]
+
+    def update_skill(user_id: str, skill_id: str, *, enabled: bool) -> SkillResponse:
+        synced = load_skills(user_id)
+        target = next((item for item in synced if item.id == skill_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="skill not found")
+        if target.scope != "user" or target.user_id != user_id:
+            raise HTTPException(status_code=403, detail="global skills cannot be toggled")
+        updated = web_store.set_user_skill_enabled(
+            user_id=user_id,
+            skill_id=skill_id,
+            enabled=enabled,
+        )
+        if updated is None:
+            raise HTTPException(status_code=404, detail="skill not found")
+        return skill_to_response(updated)
+
+    def load_background_tasks(user_id: str) -> list[BackgroundTaskResponse]:
+        try:
+            from sqlalchemy import inspect as sa_inspect
+
+            inspector = sa_inspect(web_store.engine)
+            if "tick_log" not in set(inspector.get_table_names()):
+                return []
+            with web_store.engine.connect() as conn:
+                rows = conn.execute(
+                    text(
+                        """
+                        SELECT tick_id, session_key, started_at, finished_at,
+                               terminal_action, skip_reason, steps_taken, final_message
+                        FROM tick_log
+                        WHERE user_id = :user_id AND drift_entered = TRUE
+                        ORDER BY started_at DESC
+                        LIMIT 100
+                        """
+                    ),
+                    {"user_id": user_id},
+                ).mappings().all()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to read background tasks: {exc}") from exc
+        tasks: list[BackgroundTaskResponse] = []
+        for row in rows:
+            status_text = str(row["terminal_action"] or row["skip_reason"] or "running")
+            summary = str(row["final_message"] or row["skip_reason"] or "")
+            tasks.append(
+                BackgroundTaskResponse(
+                    id=str(row["tick_id"]),
+                    session_key=str(row["session_key"]),
+                    status=status_text,
+                    summary=summary,
+                    started_at=row["started_at"],
+                    finished_at=row["finished_at"],
+                    steps_taken=int(row["steps_taken"] or 0),
+                )
+            )
+        return tasks
 
     def load_schedules_from_json(user_id: str) -> list[ScheduleResponse]:
         path = workspace_resolver.for_user(user_id) / "schedules.json"
@@ -482,6 +542,20 @@ def create_web_app(
         user: UserRecord = Depends(get_current_user),
     ) -> list[SkillResponse]:
         return load_skills(user.id)
+
+    @app.patch("/api/skills/{skill_id}", response_model=SkillResponse)
+    async def patch_skill(
+        skill_id: str,
+        req: UpdateSkillRequest,
+        user: UserRecord = Depends(get_current_user),
+    ) -> SkillResponse:
+        return update_skill(user.id, skill_id, enabled=req.enabled)
+
+    @app.get("/api/background-tasks", response_model=list[BackgroundTaskResponse])
+    async def list_background_tasks(
+        user: UserRecord = Depends(get_current_user),
+    ) -> list[BackgroundTaskResponse]:
+        return load_background_tasks(user.id)
 
     @app.patch("/api/schedules/{schedule_id}", response_model=ScheduleResponse)
     async def patch_schedule(

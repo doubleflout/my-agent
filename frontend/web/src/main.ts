@@ -34,6 +34,7 @@ import {
   PauseCircleOutlined,
   PlayCircleOutlined,
   PlusOutlined,
+  ProfileOutlined,
   RobotOutlined,
   SendOutlined,
   StopOutlined,
@@ -43,7 +44,7 @@ import "ant-design-vue/dist/reset.css";
 import "./style.css";
 
 type AuthMode = "login" | "register";
-type MainView = "chat" | "sources" | "schedules" | "skills";
+type MainView = "chat" | "sources" | "schedules" | "skills" | "backgroundTasks";
 type User = { id: string; email: string; display_name: string | null };
 type Conversation = { id: string; title: string; session_key?: string | null; updated_at: string };
 type MessageSource = {
@@ -86,6 +87,15 @@ type SkillItem = {
   created_at: string;
   updated_at: string;
 };
+type BackgroundTaskItem = {
+  id: string;
+  session_key: string;
+  status: string;
+  summary: string;
+  started_at: string;
+  finished_at?: string | null;
+  steps_taken: number;
+};
 type Message = {
   id: string;
   conversation_id: string;
@@ -112,6 +122,7 @@ const App = defineComponent({
     const sources = ref<MessageSource[]>([]);
     const scheduledJobs = ref<ScheduleItem[]>([]);
     const skills = ref<SkillItem[]>([]);
+    const backgroundTasks = ref<BackgroundTaskItem[]>([]);
     const activeId = ref("");
     const mainView = ref<MainView>("chat");
     const messages = ref<Message[]>([]);
@@ -123,7 +134,9 @@ const App = defineComponent({
     const sourcesLoading = ref(false);
     const schedulesLoading = ref(false);
     const skillsLoading = ref(false);
+    const backgroundTasksLoading = ref(false);
     const togglingScheduleIds = ref<Set<string>>(new Set());
+    const togglingSkillIds = ref<Set<string>>(new Set());
     const error = ref("");
     const messagePane = ref<HTMLElement | null>(null);
 
@@ -137,6 +150,7 @@ const App = defineComponent({
     const enabledSourceCount = computed(() => sources.value.filter((item) => item.enabled).length);
     const enabledScheduleCount = computed(() => scheduledJobs.value.filter((item) => item.enabled).length);
     const enabledSkillCount = computed(() => skills.value.filter((item) => item.enabled).length);
+    const activeBackgroundTaskCount = computed(() => backgroundTasks.value.length);
 
     function authedHeaders(extra?: HeadersInit) {
       const headers = new Headers(extra);
@@ -207,6 +221,15 @@ const App = defineComponent({
       }
     }
 
+    async function refreshBackgroundTasks() {
+      backgroundTasksLoading.value = true;
+      try {
+        backgroundTasks.value = await request<BackgroundTaskItem[]>("/api/background-tasks");
+      } finally {
+        backgroundTasksLoading.value = false;
+      }
+    }
+
     async function toggleSchedule(job: ScheduleItem) {
       const nextEnabled = !job.enabled;
       togglingScheduleIds.value = new Set([...togglingScheduleIds.value, job.id]);
@@ -227,6 +250,25 @@ const App = defineComponent({
       }
     }
 
+    async function toggleSkill(skill: SkillItem) {
+      if (skill.scope === "global") return;
+      const nextEnabled = !skill.enabled;
+      togglingSkillIds.value = new Set([...togglingSkillIds.value, skill.id]);
+      try {
+        const updated = await request<SkillItem>(`/api/skills/${skill.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ enabled: nextEnabled }),
+        });
+        skills.value = skills.value.map((item) => item.id === updated.id ? updated : item);
+      } catch (err) {
+        setError(err);
+      } finally {
+        const next = new Set(togglingSkillIds.value);
+        next.delete(skill.id);
+        togglingSkillIds.value = next;
+      }
+    }
+
     async function loadMessages(conversationId: string) {
       messages.value = await request<Message[]>(`/api/conversations/${conversationId}/messages`);
       await scrollToBottom();
@@ -244,6 +286,7 @@ const App = defineComponent({
         await refreshSources();
         await refreshSchedules();
         await refreshSkills();
+        await refreshBackgroundTasks();
       } catch {
         localStorage.removeItem(TOKEN_KEY);
         token.value = "";
@@ -274,6 +317,7 @@ const App = defineComponent({
         await refreshSources();
         await refreshSchedules();
         await refreshSkills();
+        await refreshBackgroundTasks();
       } catch (err) {
         setError(err);
       } finally {
@@ -323,6 +367,15 @@ const App = defineComponent({
       mainView.value = "skills";
       try {
         await refreshSkills();
+      } catch (err) {
+        setError(err);
+      }
+    }
+
+    async function showBackgroundTasks() {
+      mainView.value = "backgroundTasks";
+      try {
+        await refreshBackgroundTasks();
       } catch (err) {
         setError(err);
       }
@@ -451,6 +504,8 @@ const App = defineComponent({
       proactiveConversation.value = null;
       sources.value = [];
       scheduledJobs.value = [];
+      skills.value = [];
+      backgroundTasks.value = [];
       messages.value = [];
       activeId.value = "";
       mainView.value = "chat";
@@ -610,6 +665,14 @@ const App = defineComponent({
             h("span", { class: "conversation-title" }, "技能"),
             h("span", { class: "source-count" }, String(enabledSkillCount.value)),
           ]),
+          h("button", {
+            class: ["source-entry", mainView.value === "backgroundTasks" ? "active" : ""],
+            onClick: () => void showBackgroundTasks(),
+          }, [
+            h("span", { class: "conversation-icon" }, [h(ProfileOutlined)]),
+            h("span", { class: "conversation-title" }, "后台任务"),
+            h("span", { class: "source-count" }, String(activeBackgroundTaskCount.value)),
+          ]),
         ]),
       ]);
     }
@@ -693,23 +756,64 @@ const App = defineComponent({
           ? h("div", { class: "empty-chat" }, [h(Spin), h("span", "加载技能")])
           : skills.value.length === 0
             ? h("div", { class: "empty-chat" }, [h(Empty, { description: "还没有技能" })])
-            : h("div", { class: "source-list-panel" }, skills.value.map((skill) =>
-                h("article", { key: skill.id, class: "source-row" }, [
-                  h("span", { class: ["source-state", skill.enabled ? "enabled" : "disabled"] }, [
-                    h(skill.enabled ? CheckCircleOutlined : StopOutlined),
+            : h("div", { class: "skill-grid-panel" }, skills.value.map((skill) =>
+                h("article", { key: skill.id, class: ["skill-card", skill.enabled ? "enabled" : "disabled"] }, [
+                  h("div", { class: "skill-card-head" }, [
+                    h("span", { class: ["source-state", skill.enabled ? "enabled" : "disabled"] }, [
+                      h(skill.enabled ? CheckCircleOutlined : StopOutlined),
+                    ]),
+                    h("span", { class: "source-pill" }, skillKindText(skill)),
+                  ]),
+                  h("strong", { class: "skill-card-title" }, skill.title || skill.name),
+                  skill.description
+                    ? h("p", { class: "skill-card-description" }, skill.description)
+                    : null,
+                  h("div", { class: "source-meta skill-card-meta" }, [
+                    h("span", skill.relative_path),
+                    h("span", skill.source),
+                  ]),
+                  skill.scope === "global"
+                    ? h("span", { class: "skill-global-note" }, "全局技能")
+                    : h(Button, {
+                        class: "skill-toggle",
+                        size: "small",
+                        type: skill.enabled ? "default" : "primary",
+                        loading: togglingSkillIds.value.has(skill.id),
+                        onClick: () => void toggleSkill(skill),
+                      }, () => [
+                        h(skill.enabled ? PauseCircleOutlined : PlayCircleOutlined),
+                        skill.enabled ? "禁用" : "启用",
+                      ]),
+                ]),
+              )),
+      ]);
+    }
+
+    function renderBackgroundTasks() {
+      return h("div", { class: "sources-view" }, [
+        backgroundTasksLoading.value
+          ? h("div", { class: "empty-chat" }, [h(Spin), h("span", "加载后台任务")])
+          : backgroundTasks.value.length === 0
+            ? h("div", { class: "empty-chat" }, [h(Empty, { description: "还没有后台任务记录" })])
+            : h("div", { class: "source-list-panel" }, backgroundTasks.value.map((task) =>
+                h("article", { key: task.id, class: "source-row" }, [
+                  h("span", { class: ["source-state", task.status === "reply" ? "enabled" : "disabled"] }, [
+                    h(task.status === "reply" ? CheckCircleOutlined : StopOutlined),
                   ]),
                   h("div", { class: "source-main" }, [
                     h("div", { class: "source-title-line" }, [
-                      h("strong", skill.title || skill.name),
-                      h("span", { class: "source-pill" }, skillKindText(skill)),
+                      h("strong", task.id),
+                      h("span", { class: "source-pill" }, task.status || "unknown"),
                     ]),
-                    skill.description
-                      ? h("p", { class: "source-description" }, skill.description)
+                    task.summary
+                      ? h("p", { class: "source-description" }, task.summary)
                       : null,
                     h("div", { class: "source-meta" }, [
-                      h("span", `path: ${skill.relative_path}/${skill.entry_file}`),
-                      h("span", `source: ${skill.source}`),
-                    ]),
+                      h("span", `开始: ${formatScheduleTime(task.started_at)}`),
+                      task.finished_at ? h("span", `结束: ${formatScheduleTime(task.finished_at)}`) : null,
+                      h("span", `步骤: ${task.steps_taken}`),
+                      h("span", task.session_key),
+                    ].filter(Boolean)),
                   ]),
                 ]),
               )),
@@ -720,6 +824,7 @@ const App = defineComponent({
       if (mainView.value === "sources") return renderSources();
       if (mainView.value === "schedules") return renderSchedules();
       if (mainView.value === "skills") return renderSkills();
+      if (mainView.value === "backgroundTasks") return renderBackgroundTasks();
       if (!activeId.value) {
         return h("div", { class: "empty-chat" }, [
           h(Empty, { description: "创建或选择一个会话开始聊天" }),
@@ -768,7 +873,9 @@ const App = defineComponent({
                     ? "定时任务"
                     : mainView.value === "skills"
                       ? "技能"
-                      : activeConversation.value?.title || "选择会话",
+                      : mainView.value === "backgroundTasks"
+                        ? "后台任务"
+                        : activeConversation.value?.title || "选择会话",
               ),
               h(Typography.Text, { type: "secondary" }, () =>
                 mainView.value === "sources"
@@ -777,10 +884,12 @@ const App = defineComponent({
                     ? `已启用 ${enabledScheduleCount.value} 个任务`
                     : mainView.value === "skills"
                       ? `已同步 ${enabledSkillCount.value} 个技能`
-                      : activeId.value ? "当前对话" : "从左侧选择一个对话",
+                      : mainView.value === "backgroundTasks"
+                        ? `最近 ${activeBackgroundTaskCount.value} 条 drift 记录`
+                        : activeId.value ? "当前对话" : "从左侧选择一个对话",
               ),
             ]),
-            busy.value || sourcesLoading.value || schedulesLoading.value || skillsLoading.value
+            busy.value || sourcesLoading.value || schedulesLoading.value || skillsLoading.value || backgroundTasksLoading.value
               ? h(Spin, { size: "small" })
               : null,
           ]),

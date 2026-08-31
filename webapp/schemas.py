@@ -104,6 +104,20 @@ class UpdateScheduleRequest(BaseModel):
     enabled: bool
 
 
+class UpdateSkillRequest(BaseModel):
+    enabled: bool
+
+
+class BackgroundTaskResponse(BaseModel):
+    id: str
+    session_key: str
+    status: str
+    summary: str
+    started_at: datetime
+    finished_at: datetime | None = None
+    steps_taken: int = 0
+
+
 class MessageResponse(BaseModel):
     id: str
     conversation_id: str

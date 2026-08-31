@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import httpx
+from sqlalchemy import text
 
 from webapp.agent_executor import web_session_key
 from webapp.app import create_web_app
@@ -297,6 +298,119 @@ async def test_skills_endpoint_syncs_global_and_user_workspace_skills(tmp_path):
     assert by_name["user-drift"]["skill_type"] == "drift"
     assert by_name["user-drift"]["relative_path"] == "drift/skills/user-drift"
     assert by_name["weather"]["scope"] == "global"
+
+
+async def test_user_skill_enabled_can_be_toggled_but_global_skill_cannot(tmp_path):
+    app = make_app(tmp_path)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        token = await register(client, "toggle-skill@example.com")
+        me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        user_id = me.json()["id"]
+        user_workspace = tmp_path / "users" / user_id
+        skill_dir = user_workspace / "skills" / "user-toggle"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: user-toggle\ndescription: 用户可启停技能\n---\n",
+            encoding="utf-8",
+        )
+
+        listed = await client.get("/api/skills", headers={"Authorization": f"Bearer {token}"})
+        assert listed.status_code == 200, listed.text
+        by_name = {row["name"]: row for row in listed.json()}
+
+        disabled = await client.patch(
+            f"/api/skills/{by_name['user-toggle']['id']}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"enabled": False},
+        )
+        blocked = await client.patch(
+            f"/api/skills/{by_name['weather']['id']}",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"enabled": False},
+        )
+
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["enabled"] is False
+    assert disabled.json()["scope"] == "user"
+    assert blocked.status_code == 403
+
+
+async def test_background_tasks_endpoint_lists_user_drift_ticks(tmp_path):
+    app = make_app(tmp_path)
+    store: WebStore = app.state.web_store
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        token = await register(client, "background-tasks@example.com")
+        me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        user_id = me.json()["id"]
+        with store.engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE tick_log (
+                        tick_id TEXT PRIMARY KEY,
+                        session_key TEXT NOT NULL,
+                        user_id TEXT,
+                        started_at TEXT NOT NULL,
+                        finished_at TEXT,
+                        gate_exit TEXT,
+                        terminal_action TEXT,
+                        skip_reason TEXT,
+                        steps_taken INTEGER,
+                        drift_entered BOOLEAN,
+                        final_message TEXT
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO tick_log(
+                        tick_id, session_key, user_id, started_at, finished_at,
+                        terminal_action, skip_reason, steps_taken, drift_entered, final_message
+                    )
+                    VALUES(
+                        'tick-1', :session_key, :user_id, '2026-08-31T08:00:00+00:00',
+                        '2026-08-31T08:01:00+00:00', 'reply', '', 4, 1, '后台任务已推进'
+                    )
+                    """
+                ),
+                {"session_key": f"web:proactive:{user_id}:conv-1", "user_id": user_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO tick_log(
+                        tick_id, session_key, user_id, started_at, drift_entered, final_message
+                    )
+                    VALUES('tick-other', 'web:proactive:other:conv-2', 'other', '2026-08-31T08:02:00+00:00', 1, '别人的任务')
+                    """
+                )
+            )
+
+        res = await client.get(
+            "/api/background-tasks",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert res.status_code == 200, res.text
+    assert res.json() == [
+        {
+            "id": "tick-1",
+            "session_key": f"web:proactive:{user_id}:conv-1",
+            "status": "reply",
+            "summary": "后台任务已推进",
+            "started_at": "2026-08-31T08:00:00Z",
+            "finished_at": "2026-08-31T08:01:00Z",
+            "steps_taken": 4,
+        }
+    ]
 
 
 async def test_schedule_enabled_can_be_toggled_in_user_workspace(tmp_path):
