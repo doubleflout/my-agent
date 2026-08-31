@@ -16,7 +16,9 @@ from zoneinfo import ZoneInfo
 from agent.config_models import (
     ChannelsConfig,
     Config,
+    EvalConfig,
     FitbitIntegrationConfig,
+    LangSmithEvalConfig,
     MemoryConfig,
     MemoryEmbeddingConfig,
     PeerAgentConfig,
@@ -92,6 +94,7 @@ def load_config(path: str | Path = "config.toml") -> Config:
     peer_agents = _load_peer_agents_config(data)
     fitbit = _load_fitbit_config(data)
     wiring = _load_wiring_config(data)
+    eval_config = _load_eval_config(data)
 
     return Config(
         provider=provider,
@@ -162,6 +165,7 @@ def load_config(path: str | Path = "config.toml") -> Config:
         vl_base_url=str(llm_vl.get("base_url") or data.get("vl_base_url", "")),
         peer_agents=peer_agents,
         wiring=wiring,
+        eval=eval_config,
     )
 
 
@@ -343,6 +347,27 @@ def _load_wiring_config(data: dict) -> WiringConfig:
     )
 
 
+def _load_eval_config(data: dict) -> EvalConfig:
+    eval_data = _as_dict(data.get("eval"))
+    langsmith = _as_dict(eval_data.get("langsmith"))
+    return EvalConfig(
+        langsmith=LangSmithEvalConfig(
+            enabled=bool(langsmith.get("enabled", False)),
+            project=str(langsmith.get("project", "akashic-longmemeval") or ""),
+            dataset=str(langsmith.get("dataset", "akashic-longmemeval") or ""),
+            api_key=_normalize_optional_config_text(
+                _resolve(str(langsmith.get("api_key", "")))
+            ),
+            endpoint=_normalize_optional_config_text(
+                _resolve(str(langsmith.get("endpoint", "")))
+            ),
+            workspace_id=_normalize_optional_config_text(
+                _resolve(str(langsmith.get("workspace_id", "")))
+            ),
+        )
+    )
+
+
 def _load_extra_body(data: dict) -> dict:
     llm = _as_dict(data.get("llm"))
     llm_main = _as_dict(llm.get("main"))
@@ -396,6 +421,8 @@ __all__ = [
     "ChannelsConfig",
     "Config",
     "DEFAULT_SOCKET",
+    "EvalConfig",
+    "LangSmithEvalConfig",
     "MemoryConfig",
     "MemoryEmbeddingConfig",
     "QQChannelConfig",

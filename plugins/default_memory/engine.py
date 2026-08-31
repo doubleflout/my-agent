@@ -39,7 +39,6 @@ from core.net.http import SharedHttpResources
 from memory2.embedder import Embedder
 from memory2.memorizer import Memorizer
 from memory2.post_response_worker import PostResponseMemoryWorker
-from memory2.postgres_store import PostgresMemoryStore, resolve_memory_user_id
 from memory2.procedure_tagger import ProcedureTagger
 from memory2.query_builder import build_procedure_queries
 from memory2.retriever import Retriever
@@ -57,6 +56,19 @@ _HYPOTHESIS_TIMEOUT_S = 3.0
 _VECTOR_SCORE_THRESHOLD = 0.35
 _VECTOR_TOP_K = 15
 _ChatCall = Callable[..., Awaitable[LLMResponse]]
+
+
+def _load_postgres_memory_store():
+    try:
+        from memory2.postgres_store import PostgresMemoryStore, resolve_memory_user_id
+    except ModuleNotFoundError as exc:
+        if exc.name == "psycopg":
+            raise RuntimeError(
+                "storage.backend=postgres requires psycopg. Install it with: "
+                "pip install 'psycopg[binary]>=3.2.0'"
+            ) from exc
+        raise
+    return PostgresMemoryStore, resolve_memory_user_id
 
 
 def _build_entry_source_ref(base_source_ref: str, entry: str) -> str:
@@ -480,6 +492,7 @@ class DefaultMemoryEngine:
         if storage_backend == "postgres":
             if not database_url:
                 raise RuntimeError("storage.backend=postgres but storage.postgres.database_url is empty")
+            PostgresMemoryStore, resolve_memory_user_id = _load_postgres_memory_store()
             memory_user_id = resolve_memory_user_id(
                 workspace=workspace,
                 database_url=database_url,
@@ -563,6 +576,7 @@ class DefaultMemoryEngine:
                 proactive_chat_id = str(getattr(proactive_target, "chat_id", "") or "").strip()
                 if proactive_channel and proactive_chat_id:
                     proactive_session_key = f"{proactive_channel}:{proactive_chat_id}"
+            PostgresMemoryStore, resolve_memory_user_id = _load_postgres_memory_store()
             store = PostgresMemoryStore(
                 database_url,
                 workspace=workspace,
