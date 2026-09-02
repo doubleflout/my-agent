@@ -69,6 +69,40 @@ class FakeWebStore:
         self.messages.append(kwargs)
 
 
+class FakeSkillLoader:
+    def __init__(self) -> None:
+        self.disabled_calls: list[set[str]] = []
+
+    def set_disabled_skill_names(self, names) -> None:
+        self.disabled_calls.append(set(names))
+
+
+class FakeContext:
+    def __init__(self) -> None:
+        self.skills = FakeSkillLoader()
+
+
+class FakeLoopWithContext(FakeLoop):
+    def __init__(self) -> None:
+        super().__init__()
+        self.context = FakeContext()
+
+
+class FakeRuntimeWithContext(FakeRuntime):
+    def __init__(self, workspace: Path) -> None:
+        super().__init__(workspace)
+        self.loop = FakeLoopWithContext()
+
+
+class FakeWebStoreWithDisabled(FakeWebStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.disabled: set[str] = set()
+
+    def list_disabled_user_skill_names(self, **_) -> set[str]:
+        return set(self.disabled)
+
+
 class FakePushTool:
     def __init__(self) -> None:
         self.channels: dict[str, dict] = {}
@@ -199,6 +233,34 @@ def test_runtime_manager_registers_web_message_push_sender(tmp_path):
                 "metadata": {"source": "scheduler"},
             }
         ]
+        await manager.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_runtime_manager_refreshes_disabled_skill_filter_for_cached_runtime(tmp_path):
+    async def scenario() -> None:
+        store = FakeWebStoreWithDisabled()
+        built: list[FakeRuntimeWithContext] = []
+
+        def builder(config, workspace, http_resources):
+            runtime = FakeRuntimeWithContext(workspace)
+            built.append(runtime)
+            return runtime
+
+        manager = UserRuntimeManager(
+            config=make_config(),
+            base_workspace=tmp_path / "workspace",
+            http_resources=FakeHttpResources(),  # type: ignore[arg-type]
+            runtime_builder=builder,  # type: ignore[arg-type]
+            web_store=store,  # type: ignore[arg-type]
+        )
+        first = await manager.get_runtime("user-1")
+        store.disabled = {"custom-skill"}
+        again = await manager.get_runtime("user-1")
+
+        assert first is again
+        assert first.loop.context.skills.disabled_calls[-1] == {"custom-skill"}
         await manager.aclose()
 
     asyncio.run(scenario())

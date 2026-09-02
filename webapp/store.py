@@ -522,6 +522,23 @@ class WebStore:
             updated = conn.execute(select(skills).where(skills.c.id == skill_id)).mappings().one()
         return self._skill_from_row(updated)
 
+    def list_disabled_user_skill_names(
+        self,
+        *,
+        user_id: str,
+        skill_types: list[str] | None = None,
+    ) -> set[str]:
+        where_parts = [
+            skills.c.scope == "user",
+            skills.c.user_id == user_id,
+            skills.c.enabled == False,  # noqa: E712
+        ]
+        if skill_types:
+            where_parts.append(skills.c.skill_type.in_(skill_types))
+        with self.engine.connect() as conn:
+            rows = conn.execute(select(skills.c.name).where(*where_parts)).all()
+        return {str(row[0]) for row in rows if row[0]}
+
     def upsert_skill_record(
         self,
         *,

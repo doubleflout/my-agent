@@ -338,7 +338,7 @@ async def test_user_skill_enabled_can_be_toggled_but_global_skill_cannot(tmp_pat
     assert blocked.status_code == 403
 
 
-async def test_background_tasks_endpoint_lists_user_drift_ticks(tmp_path):
+async def test_background_tasks_endpoint_groups_drift_ticks_by_skill(tmp_path):
     app = make_app(tmp_path)
     store: WebStore = app.state.web_store
     async with httpx.AsyncClient(
@@ -348,6 +348,12 @@ async def test_background_tasks_endpoint_lists_user_drift_ticks(tmp_path):
         token = await register(client, "background-tasks@example.com")
         me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
         user_id = me.json()["id"]
+        drift_skill = tmp_path / "users" / user_id / "drift" / "skills" / "daily-review"
+        drift_skill.mkdir(parents=True)
+        (drift_skill / "SKILL.md").write_text(
+            "---\nname: daily-review\ndescription: 每日复盘后台任务\n---\n",
+            encoding="utf-8",
+        )
         with store.engine.begin() as conn:
             conn.execute(
                 text(
@@ -371,6 +377,28 @@ async def test_background_tasks_endpoint_lists_user_drift_ticks(tmp_path):
             conn.execute(
                 text(
                     """
+                    CREATE TABLE tick_step_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        tick_id TEXT NOT NULL,
+                        step_index INTEGER NOT NULL,
+                        phase TEXT NOT NULL,
+                        tool_name TEXT NOT NULL,
+                        tool_call_id TEXT NOT NULL,
+                        tool_args_json TEXT NOT NULL,
+                        tool_result_text TEXT NOT NULL,
+                        terminal_action_after TEXT,
+                        skip_reason_after TEXT,
+                        interesting_ids_after TEXT NOT NULL DEFAULT '[]',
+                        discarded_ids_after TEXT NOT NULL DEFAULT '[]',
+                        cited_ids_after TEXT NOT NULL DEFAULT '[]',
+                        final_message_after TEXT NOT NULL DEFAULT ''
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                     INSERT INTO tick_log(
                         tick_id, session_key, user_id, started_at, finished_at,
                         terminal_action, skip_reason, steps_taken, drift_entered, final_message
@@ -382,6 +410,34 @@ async def test_background_tasks_endpoint_lists_user_drift_ticks(tmp_path):
                     """
                 ),
                 {"session_key": f"web:proactive:{user_id}:conv-1", "user_id": user_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO tick_log(
+                        tick_id, session_key, user_id, started_at, finished_at,
+                        terminal_action, skip_reason, steps_taken, drift_entered, final_message
+                    )
+                    VALUES(
+                        'tick-2', :session_key, :user_id, '2026-08-31T09:00:00+00:00',
+                        '2026-08-31T09:01:00+00:00', 'skip', 'no_content', 2, 1, '后台任务最新推进'
+                    )
+                    """
+                ),
+                {"session_key": f"web:proactive:{user_id}:conv-1", "user_id": user_id},
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO tick_step_log(
+                        tick_id, step_index, phase, tool_name, tool_call_id, tool_args_json, tool_result_text
+                    )
+                    VALUES
+                        ('tick-1', 1, 'drift', 'finish_drift', 'call-1', :args, '{}'),
+                        ('tick-2', 1, 'drift', 'finish_drift', 'call-2', :args, '{}')
+                    """
+                ),
+                {"args": json.dumps({"skill_used": "daily-review"}, ensure_ascii=False)},
             )
             conn.execute(
                 text(
@@ -400,17 +456,81 @@ async def test_background_tasks_endpoint_lists_user_drift_ticks(tmp_path):
         )
 
     assert res.status_code == 200, res.text
-    assert res.json() == [
-        {
-            "id": "tick-1",
-            "session_key": f"web:proactive:{user_id}:conv-1",
-            "status": "reply",
-            "summary": "后台任务已推进",
-            "started_at": "2026-08-31T08:00:00Z",
-            "finished_at": "2026-08-31T08:01:00Z",
-            "steps_taken": 4,
-        }
-    ]
+    rows = res.json()
+    assert len(rows) == 1
+    assert rows[0]["id"] not in {"tick-1", "tick-2"}
+    assert rows[0]["name"] == "daily-review"
+    assert rows[0]["description"] == "每日复盘后台任务"
+    assert rows[0]["enabled"] is True
+    assert rows[0]["session_key"] == f"web:proactive:{user_id}:conv-1"
+    assert rows[0]["status"] == "skip"
+    assert rows[0]["summary"] == "后台任务最新推进"
+    assert rows[0]["started_at"] == "2026-08-31T09:00:00Z"
+    assert rows[0]["finished_at"] == "2026-08-31T09:01:00Z"
+    assert rows[0]["steps_taken"] == 2
+
+
+async def test_background_tasks_endpoint_ignores_unmatched_tick_ids(tmp_path):
+    app = make_app(tmp_path)
+    store: WebStore = app.state.web_store
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        token = await register(client, "background-no-finish@example.com")
+        me = await client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+        user_id = me.json()["id"]
+        drift_skill = tmp_path / "users" / user_id / "drift" / "skills" / "daily-review"
+        drift_skill.mkdir(parents=True)
+        (drift_skill / "SKILL.md").write_text(
+            "---\nname: daily-review\ndescription: 每日复盘后台任务\n---\n",
+            encoding="utf-8",
+        )
+        with store.engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE tick_log (
+                        tick_id TEXT PRIMARY KEY,
+                        session_key TEXT NOT NULL,
+                        user_id TEXT,
+                        started_at TEXT NOT NULL,
+                        finished_at TEXT,
+                        terminal_action TEXT,
+                        skip_reason TEXT,
+                        steps_taken INTEGER,
+                        drift_entered BOOLEAN,
+                        final_message TEXT
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO tick_log(
+                        tick_id, session_key, user_id, started_at, finished_at,
+                        terminal_action, skip_reason, steps_taken, drift_entered, final_message
+                    )
+                    VALUES
+                        ('tick-a', :session_key, :user_id, '2026-08-31T08:00:00+00:00', NULL, 'skip', 'no_content', 1, 1, ''),
+                        ('tick-b', :session_key, :user_id, '2026-08-31T09:00:00+00:00', NULL, 'skip', 'no_content', 1, 1, '')
+                    """
+                ),
+                {"session_key": f"web:proactive:{user_id}:conv-1", "user_id": user_id},
+            )
+
+        res = await client.get(
+            "/api/background-tasks",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert res.status_code == 200, res.text
+    rows = res.json()
+    assert len(rows) == 1
+    assert rows[0]["name"] == "daily-review"
+    assert rows[0]["id"] not in {"tick-a", "tick-b"}
+    assert rows[0]["status"] == "idle"
 
 
 async def test_schedule_enabled_can_be_toggled_in_user_workspace(tmp_path):

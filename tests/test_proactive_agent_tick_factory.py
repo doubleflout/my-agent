@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from proactive_v2.agent_tick_factory import AgentTickDeps, AgentTickFactory
 from proactive_v2.config import ProactiveConfig
 from proactive_v2.context import AgentTickContext
+from proactive_v2.drift_state import DriftStateStore
 from proactive_v2.mcp_sources import McpClientPool
 from bootstrap.proactive import build_proactive_runtime
 
@@ -76,6 +77,27 @@ def test_agent_tick_factory_builds_drift_runner_when_enabled(tmp_path):
     tick = AgentTickFactory(deps).build()
     assert tick._drift_runner is not None
     assert tick._drift_runner.store.drift_dir == tmp_path / "drift"
+
+
+def test_drift_state_store_skips_disabled_user_skills(tmp_path):
+    drift_dir = tmp_path / "drift"
+    enabled_dir = drift_dir / "skills" / "enabled-drift"
+    disabled_dir = drift_dir / "skills" / "disabled-drift"
+    enabled_dir.mkdir(parents=True)
+    disabled_dir.mkdir(parents=True)
+    (enabled_dir / "SKILL.md").write_text(
+        "---\nname: enabled-drift\ndescription: enabled\n---\n",
+        encoding="utf-8",
+    )
+    (disabled_dir / "SKILL.md").write_text(
+        "---\nname: disabled-drift\ndescription: disabled\n---\n",
+        encoding="utf-8",
+    )
+
+    store = DriftStateStore(drift_dir, disabled_skill_names={"disabled-drift"})
+
+    assert [skill.name for skill in store.scan_skills()] == ["enabled-drift"]
+    assert store.skill_dir_for("disabled-drift") is None
 
 
 def test_agent_tick_factory_binds_drift_step_recorder_to_tick_store(tmp_path):

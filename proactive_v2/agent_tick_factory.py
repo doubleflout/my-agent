@@ -61,6 +61,7 @@ class AgentTickDeps:
     target_session_key: str | None = None
     target_channel: str | None = None
     target_chat_id: str | None = None
+    disabled_drift_skill_names: set[str] = field(default_factory=set)
 
 
 class AgentTickFactory:
@@ -278,6 +279,7 @@ class AgentTickFactory:
             builtin_skills_dir=BUILTIN_DRIFT_SKILLS_DIR,
             include_builtin_skills=True,
             builtin_skill_names=BUILTIN_DRIFT_SKILL_NAMES,
+            disabled_skill_names=self._deps.disabled_drift_skill_names,
         )
         return DriftRunner(
             store=store,

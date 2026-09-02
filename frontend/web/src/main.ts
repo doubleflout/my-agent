@@ -89,10 +89,13 @@ type SkillItem = {
 };
 type BackgroundTaskItem = {
   id: string;
-  session_key: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  session_key?: string | null;
   status: string;
   summary: string;
-  started_at: string;
+  started_at?: string | null;
   finished_at?: string | null;
   steps_taken: number;
 };
@@ -795,26 +798,26 @@ const App = defineComponent({
           ? h("div", { class: "empty-chat" }, [h(Spin), h("span", "加载后台任务")])
           : backgroundTasks.value.length === 0
             ? h("div", { class: "empty-chat" }, [h(Empty, { description: "还没有后台任务记录" })])
-            : h("div", { class: "source-list-panel" }, backgroundTasks.value.map((task) =>
-                h("article", { key: task.id, class: "source-row" }, [
-                  h("span", { class: ["source-state", task.status === "reply" ? "enabled" : "disabled"] }, [
-                    h(task.status === "reply" ? CheckCircleOutlined : StopOutlined),
-                  ]),
-                  h("div", { class: "source-main" }, [
-                    h("div", { class: "source-title-line" }, [
-                      h("strong", task.id),
-                      h("span", { class: "source-pill" }, task.status || "unknown"),
+            : h("div", { class: "task-grid-panel" }, backgroundTasks.value.map((task) =>
+                h("article", { key: task.id, class: "task-card" }, [
+                  h("div", { class: "task-card-head" }, [
+                    h("span", { class: ["source-state", task.status === "reply" ? "enabled" : "disabled"] }, [
+                      h(task.status === "reply" ? CheckCircleOutlined : StopOutlined),
                     ]),
-                    task.summary
-                      ? h("p", { class: "source-description" }, task.summary)
-                      : null,
-                    h("div", { class: "source-meta" }, [
-                      h("span", `开始: ${formatScheduleTime(task.started_at)}`),
-                      task.finished_at ? h("span", `结束: ${formatScheduleTime(task.finished_at)}`) : null,
-                      h("span", `步骤: ${task.steps_taken}`),
-                      h("span", task.session_key),
-                    ].filter(Boolean)),
+                    h("span", { class: "source-pill" }, task.status || "unknown"),
                   ]),
+                  h("strong", { class: "task-card-title" }, task.name || task.id),
+                  task.summary
+                    ? h("p", { class: "task-card-description" }, task.summary)
+                    : task.description
+                      ? h("p", { class: "task-card-description" }, task.description)
+                    : null,
+                  h("div", { class: "source-meta task-card-meta" }, [
+                    task.started_at ? h("span", `最近: ${formatScheduleTime(task.started_at)}`) : h("span", "尚未运行"),
+                    task.finished_at ? h("span", `完成: ${formatScheduleTime(task.finished_at)}`) : null,
+                    h("span", `步骤: ${task.steps_taken}`),
+                    task.session_key ? h("span", task.session_key) : null,
+                  ].filter(Boolean)),
                 ]),
               )),
       ]);

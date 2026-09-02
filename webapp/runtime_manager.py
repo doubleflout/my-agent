@@ -92,12 +92,14 @@ class UserRuntimeManager:
             entry = self._entries.get(user_id)
             if entry is not None:
                 entry.last_used = now
+                self._apply_user_skill_filters(entry.runtime, user_id)
                 return entry.runtime
 
             await self._evict_lru_if_needed_locked()
             workspace = self.workspace_for_user(user_id)
             runtime = self.runtime_builder(self.config, workspace, self.http_resources)
             await runtime.start()
+            self._apply_user_skill_filters(runtime, user_id)
             self._register_web_push_sender(runtime, user_id)
             scheduler_task = self._start_scheduler_task(runtime, user_id)
             self._entries[user_id] = _RuntimeEntry(
@@ -106,6 +108,22 @@ class UserRuntimeManager:
                 scheduler_task=scheduler_task,
             )
             return runtime
+
+    def _apply_user_skill_filters(self, runtime: CoreRuntime, user_id: str) -> None:
+        if self.web_store is None:
+            return
+        list_disabled = getattr(self.web_store, "list_disabled_user_skill_names", None)
+        if not callable(list_disabled):
+            return
+        disabled = list_disabled(
+            user_id=user_id,
+            skill_types=["normal", "tool"],
+        )
+        skills = getattr(getattr(runtime, "loop", None), "context", None)
+        loader = getattr(skills, "skills", None)
+        set_disabled = getattr(loader, "set_disabled_skill_names", None)
+        if callable(set_disabled):
+            set_disabled(disabled)
 
     def _start_scheduler_task(
         self,
@@ -288,6 +306,7 @@ class UserRuntimeProactiveRunner:
                     target_session_key=job.session_key,
                     target_channel="web_proactive",
                     target_chat_id=job.conversation_id,
+                    disabled_drift_skill_names=self._disabled_drift_skill_names(job.user_id),
                 )
             ).build()
             await tick.tick()
@@ -298,6 +317,12 @@ class UserRuntimeProactiveRunner:
             if callable(close):
                 with contextlib.suppress(Exception):
                     close()
+
+    def _disabled_drift_skill_names(self, user_id: str) -> set[str]:
+        list_disabled = getattr(self.store, "list_disabled_user_skill_names", None)
+        if not callable(list_disabled):
+            return set()
+        return set(list_disabled(user_id=user_id, skill_types=["drift"]))
 
 
 class _WebProactiveOutboundPort(OutboundPort):

@@ -110,10 +110,13 @@ class UpdateSkillRequest(BaseModel):
 
 class BackgroundTaskResponse(BaseModel):
     id: str
-    session_key: str
+    name: str
+    description: str = ""
+    enabled: bool = True
+    session_key: str = ""
     status: str
     summary: str
-    started_at: datetime
+    started_at: datetime | None = None
     finished_at: datetime | None = None
     steps_taken: int = 0
 

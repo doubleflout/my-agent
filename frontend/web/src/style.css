@@ -453,6 +453,59 @@ input {
   border-radius: 8px;
 }
 
+.task-grid-panel {
+  width: min(980px, 100%);
+  margin-left: auto;
+  margin-right: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.task-card {
+  min-width: 0;
+  min-height: 188px;
+  padding: 14px;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 10px;
+  border: 1px solid #e7e7e7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.task-card-head {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-card-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #171717;
+  font-size: 15px;
+}
+
+.task-card-description {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  color: #525252;
+  line-height: 1.5;
+}
+
+.task-card-meta {
+  overflow: hidden;
+}
+
 .source-row {
   min-width: 0;
   padding: 14px;
@@ -744,5 +797,9 @@ input {
 
   .skill-grid-panel {
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+
+  .task-grid-panel {
+    grid-template-columns: 1fr;
   }
 }

@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from core.common.timekit import parse_iso
 from infra.persistence.json_store import atomic_save_json, load_json
@@ -76,6 +76,7 @@ class DriftStateStore:
         builtin_skills_dir: Path | None = None,
         include_builtin_skills: bool = False,
         builtin_skill_names: set[str] | None = None,
+        disabled_skill_names: Iterable[str] | None = None,
     ) -> None:
         self.drift_dir = drift_dir.expanduser()
         self.skills_dir = self.drift_dir / "skills"
@@ -87,6 +88,11 @@ class DriftStateStore:
         )
         self.include_builtin_skills = include_builtin_skills
         self.builtin_skill_names = set(builtin_skill_names or set())
+        self.disabled_skill_names = {
+            str(name).strip()
+            for name in (disabled_skill_names or [])
+            if str(name).strip()
+        }
         self.skills_dir.mkdir(parents=True, exist_ok=True)
 
     def scan_skills(self) -> list[SkillMeta]:
@@ -98,6 +104,8 @@ class DriftStateStore:
                 continue
             for skill_dir in sorted(root.iterdir()):
                 if not skill_dir.is_dir():
+                    continue
+                if not builtin and skill_dir.name in self.disabled_skill_names:
                     continue
                 if builtin and self.builtin_skill_names and skill_dir.name not in self.builtin_skill_names:
                     continue
@@ -157,7 +165,7 @@ class DriftStateStore:
         if not name:
             return None
         workspace_dir = self.skills_dir / name
-        if (workspace_dir / "SKILL.md").exists():
+        if name not in self.disabled_skill_names and (workspace_dir / "SKILL.md").exists():
             return workspace_dir
         if self.include_builtin_skills and self.builtin_skills_dir is not None:
             builtin_dir = self.builtin_skills_dir / name

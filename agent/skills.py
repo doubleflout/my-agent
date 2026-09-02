@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+from collections.abc import Iterable
 
 # 内置技能目录（项目 skills/ 文件夹）
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
@@ -12,11 +13,31 @@ class SkillsLoader:
     """技能加载器：管理 workspace 和内置两套技能目录，
     负责列举、加载、过滤以及生成 system prompt 摘要。"""
 
-    def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None):
+    def __init__(
+        self,
+        workspace: Path,
+        builtin_skills_dir: Path | None = None,
+        disabled_skill_names: Iterable[str] | None = None,
+    ):
         self.workspace = workspace
         # 用户自定义技能目录（优先级高于内置）
         self.workspace_skills = workspace / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
+        self._disabled_skill_names = {
+            str(name).strip()
+            for name in (disabled_skill_names or [])
+            if str(name).strip()
+        }
+
+    def set_disabled_skill_names(self, names: Iterable[str] | None) -> None:
+        self._disabled_skill_names = {
+            str(name).strip()
+            for name in (names or [])
+            if str(name).strip()
+        }
+
+    def _is_disabled(self, name: str) -> bool:
+        return str(name or "").strip() in self._disabled_skill_names
 
     def ensure_builtin_skill_mirrors(self) -> None:
         """Copy bundled skills into the workspace so file tools can read them."""
@@ -53,6 +74,8 @@ class SkillsLoader:
         if self.workspace_skills.exists():
             for skill_dir in self.workspace_skills.iterdir():
                 if skill_dir.is_dir():
+                    if self._is_disabled(skill_dir.name):
+                        continue
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
                         skills.append(
@@ -67,6 +90,8 @@ class SkillsLoader:
         if self.builtin_skills and self.builtin_skills.exists():
             for skill_dir in self.builtin_skills.iterdir():
                 if skill_dir.is_dir():
+                    if self._is_disabled(skill_dir.name):
+                        continue
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists() and not any(
                         s["name"] == skill_dir.name for s in skills
@@ -114,6 +139,8 @@ class SkillsLoader:
         """
         parts = []
         for name in skill_names:
+            if self._is_disabled(name):
+                continue
             content = self.load_skill(name)
             if content:
                 content = self._strip_frontmatter(content)
@@ -132,6 +159,8 @@ class SkillsLoader:
         Returns:
             SKILL.md 的文本内容，未找到则返回 None。
         """
+        if self._is_disabled(name):
+            return None
         # 优先查 workspace 自定义技能
         workspace_skill = self.workspace_skills / name / "SKILL.md"
         if workspace_skill.exists():

@@ -247,46 +247,114 @@ def create_web_app(
         return skill_to_response(updated)
 
     def load_background_tasks(user_id: str) -> list[BackgroundTaskResponse]:
+        drift_skills = [
+            skill
+            for skill in load_skills(user_id)
+            if skill.scope == "user" and skill.skill_type == "drift"
+        ]
+        if not drift_skills:
+            return []
         try:
             from sqlalchemy import inspect as sa_inspect
 
             inspector = sa_inspect(web_store.engine)
-            if "tick_log" not in set(inspector.get_table_names()):
-                return []
-            with web_store.engine.connect() as conn:
-                rows = conn.execute(
-                    text(
-                        """
-                        SELECT tick_id, session_key, started_at, finished_at,
-                               terminal_action, skip_reason, steps_taken, final_message
-                        FROM tick_log
-                        WHERE user_id = :user_id AND drift_entered = TRUE
-                        ORDER BY started_at DESC
-                        LIMIT 100
-                        """
-                    ),
-                    {"user_id": user_id},
-                ).mappings().all()
+            table_names = set(inspector.get_table_names())
+            if "tick_log" not in table_names:
+                latest_runs: dict[str, Any] = {}
+                rows = []
+            else:
+                latest_runs = {}
+                rows = []
+            has_step_log = "tick_step_log" in table_names
+            if "tick_log" in table_names:
+                with web_store.engine.connect() as conn:
+                    if has_step_log:
+                        query = text(
+                            """
+                            SELECT l.tick_id, l.session_key, l.started_at, l.finished_at,
+                                   l.terminal_action, l.skip_reason, l.steps_taken, l.final_message,
+                                   s.tool_args_json
+                            FROM tick_log l
+                            LEFT JOIN tick_step_log s
+                              ON s.tick_id = l.tick_id AND s.tool_name = 'finish_drift'
+                            WHERE l.user_id = :user_id AND l.drift_entered = TRUE
+                            ORDER BY l.started_at DESC
+                            LIMIT 500
+                            """
+                        )
+                    else:
+                        query = text(
+                            """
+                            SELECT tick_id, session_key, started_at, finished_at,
+                                   terminal_action, skip_reason, steps_taken, final_message,
+                                   NULL AS tool_args_json
+                            FROM tick_log
+                            WHERE user_id = :user_id AND drift_entered = TRUE
+                            ORDER BY started_at DESC
+                            LIMIT 500
+                            """
+                        )
+                    rows = conn.execute(
+                        query,
+                        {"user_id": user_id},
+                    ).mappings().all()
+                    known_names = {skill.name for skill in drift_skills}
+                    for row in rows:
+                        skill_name = _background_skill_name_from_tick(row)
+                        if not skill_name or skill_name not in known_names or skill_name in latest_runs:
+                            continue
+                        latest_runs[skill_name] = row
         except HTTPException:
             raise
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"failed to read background tasks: {exc}") from exc
         tasks: list[BackgroundTaskResponse] = []
-        for row in rows:
-            status_text = str(row["terminal_action"] or row["skip_reason"] or "running")
-            summary = str(row["final_message"] or row["skip_reason"] or "")
+        for skill in drift_skills:
+            row = latest_runs.get(skill.name)
+            if row is None:
+                status_text = "disabled" if not skill.enabled else "idle"
+                summary = skill.description
+                session_key = ""
+                started_at = None
+                finished_at = None
+                steps_taken = 0
+            else:
+                status_text = str(row["terminal_action"] or row["skip_reason"] or "running")
+                summary = str(row["final_message"] or row["skip_reason"] or skill.description)
+                session_key = str(row["session_key"])
+                started_at = row["started_at"]
+                finished_at = row["finished_at"]
+                steps_taken = int(row["steps_taken"] or 0)
             tasks.append(
                 BackgroundTaskResponse(
-                    id=str(row["tick_id"]),
-                    session_key=str(row["session_key"]),
+                    id=skill.id,
+                    name=skill.name,
+                    description=skill.description,
+                    enabled=skill.enabled,
+                    session_key=session_key,
                     status=status_text,
                     summary=summary,
-                    started_at=row["started_at"],
-                    finished_at=row["finished_at"],
-                    steps_taken=int(row["steps_taken"] or 0),
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    steps_taken=steps_taken,
                 )
             )
         return tasks
+
+    def _background_skill_name_from_tick(row: Any) -> str:
+        raw_args = row.get("tool_args_json") if hasattr(row, "get") else None
+        args: dict[str, Any] = {}
+        if isinstance(raw_args, dict):
+            args = raw_args
+        elif isinstance(raw_args, str) and raw_args.strip():
+            try:
+                parsed = json.loads(raw_args)
+                if isinstance(parsed, dict):
+                    args = parsed
+            except json.JSONDecodeError:
+                args = {}
+        skill = str(args.get("skill_used") or "").strip()
+        return skill
 
     def load_schedules_from_json(user_id: str) -> list[ScheduleResponse]:
         path = workspace_resolver.for_user(user_id) / "schedules.json"
