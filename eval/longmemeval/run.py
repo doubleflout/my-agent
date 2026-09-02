@@ -82,17 +82,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--type", dest="question_type", default=None,
                    help="Filter to a specific question_type (e.g. single-session-preference)")
     p.add_argument("--langsmith", action="store_true",
-<<<<<<< HEAD
                    help="Trace each QA run to LangSmith without changing benchmark scoring")
     p.add_argument("--langsmith-project", default=None,
                    help="LangSmith project name for --langsmith traces")
-=======
-                   help="Override config and trace each QA run to LangSmith")
-    p.add_argument("--no-langsmith", action="store_true",
-                   help="Override config and disable LangSmith tracing")
-    p.add_argument("--langsmith-project", default=None,
-                   help="Override eval.langsmith.project for this run")
->>>>>>> codex/langsmith
     return p
 
 
@@ -268,20 +260,12 @@ async def _process_instance(
             progress.update(worker_task,
                             description=f"[cyan]{short_id}[/]  [yellow]agent[/]",
                             completed=0, total=1)
-<<<<<<< HEAD
             if args.langsmith:
-=======
-            if args._langsmith_enabled:
->>>>>>> codex/langsmith
                 result = await run_langsmith_traced_qa(
                     rt,
                     inst,
                     timeout_s=args.timeout,
-<<<<<<< HEAD
                     project_name=args.langsmith_project,
-=======
-                    langsmith_config=args._langsmith_config,
->>>>>>> codex/langsmith
                 )
             else:
                 result = await run_qa_instance(rt, inst, timeout_s=args.timeout)

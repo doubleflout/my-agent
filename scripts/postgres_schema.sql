@@ -219,7 +219,7 @@ CREATE TABLE IF NOT EXISTS consolidation_writes (
 );
 
 CREATE TABLE IF NOT EXISTS turns (
-    id BIGINT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     ts TIMESTAMPTZ NOT NULL,
     source TEXT NOT NULL,
     session_key TEXT NOT NULL REFERENCES sessions(key) ON DELETE CASCADE,
@@ -253,7 +253,7 @@ CREATE INDEX IF NOT EXISTS ix_turns_source
 ON turns(source, ts);
 
 CREATE TABLE IF NOT EXISTS rag_queries (
-    id BIGINT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     ts TIMESTAMPTZ NOT NULL,
     caller TEXT NOT NULL,
     session_key TEXT NOT NULL REFERENCES sessions(key) ON DELETE CASCADE,
@@ -274,7 +274,7 @@ CREATE INDEX IF NOT EXISTS ix_rq_caller
 ON rag_queries(caller, ts);
 
 CREATE TABLE IF NOT EXISTS memory_writes (
-    id BIGINT PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     ts TIMESTAMPTZ NOT NULL,
     session_key TEXT NOT NULL REFERENCES sessions(key) ON DELETE CASCADE,
     user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
