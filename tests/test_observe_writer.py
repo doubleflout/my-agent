@@ -23,6 +23,29 @@ migrate_legacy_rag_tables = getattr(_observe_migration, "migrate_legacy_rag_tabl
 _run_cleanup = cast(Callable[[Path], None], getattr(_observe_retention, "_run_cleanup"))
 _write_turn = getattr(_observe_writer, "_write_turn")
 TraceWriter = getattr(_observe_writer, "TraceWriter")
+_normalize_postgres_database_url = getattr(_observe_writer, "_normalize_postgres_database_url")
+_normalize_retention_postgres_database_url = getattr(
+    _observe_retention,
+    "_normalize_postgres_database_url",
+)
+
+
+def test_normalize_postgres_database_url_accepts_sqlalchemy_psycopg_scheme():
+    assert (
+        _normalize_postgres_database_url(
+            "postgresql+psycopg://postgres:postgres123@localhost:5432/akashic_agent"
+        )
+        == "postgresql://postgres:postgres123@localhost:5432/akashic_agent"
+    )
+
+
+def test_retention_normalize_postgres_database_url_accepts_sqlalchemy_psycopg_scheme():
+    assert (
+        _normalize_retention_postgres_database_url(
+            "postgresql+psycopg://postgres:postgres123@localhost:5432/akashic_agent"
+        )
+        == "postgresql://postgres:postgres123@localhost:5432/akashic_agent"
+    )
 
 
 def test_write_turn_persists_raw_output_and_meme_fields(tmp_path):

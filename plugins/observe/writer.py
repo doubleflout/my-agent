@@ -119,7 +119,7 @@ def _open_writer_db(db_path: Path, database_url: str | None) -> Any:
     if database_url:
         if psycopg is None:
             raise RuntimeError("psycopg is required for postgres observe writer")
-        conn = psycopg.connect(database_url)
+        conn = psycopg.connect(_normalize_postgres_database_url(database_url))
         _ensure_postgres_trace_identity(conn)
         return conn
     return open_db(db_path)
@@ -129,6 +129,10 @@ def _is_postgres_conn(conn: Any) -> bool:
     if psycopg is None:
         return False
     return isinstance(conn, psycopg.Connection)
+
+
+def _normalize_postgres_database_url(database_url: str) -> str:
+    return database_url.replace("postgresql+psycopg://", "postgresql://", 1)
 
 
 def _pg_json(value: Any) -> Any:

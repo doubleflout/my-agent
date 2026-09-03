@@ -75,8 +75,12 @@ def _open_cleanup_db(db_path: Path, database_url: str | None) -> object:
     if database_url:
         if psycopg is None:
             raise RuntimeError("psycopg is required for postgres observe retention")
-        return psycopg.connect(database_url)
+        return psycopg.connect(_normalize_postgres_database_url(database_url))
     return open_db(db_path)
+
+
+def _normalize_postgres_database_url(database_url: str) -> str:
+    return database_url.replace("postgresql+psycopg://", "postgresql://", 1)
 
 
 def _is_postgres_conn(conn: object) -> bool:
