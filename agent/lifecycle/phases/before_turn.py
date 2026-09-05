@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias, cast
 
 from bus.event_bus import EventBus
+from bus.events_lifecycle import PhaseCompleted
 from agent.core.runtime_support import SessionLike
 from agent.core.types import ContextBundle
 from agent.lifecycle.phase import (
@@ -113,10 +114,42 @@ class _EmitBeforeTurnCtxModule:
 
 class _ReturnBeforeTurnCtxModule:
     slot = "before_turn.return"
-    requires = ("before_turn.collect_exports", _CTX_SLOT)
+    requires = ("before_turn.fanout_completed", _CTX_SLOT)
 
     async def run(self, frame: BeforeTurnFrame) -> BeforeTurnFrame:
         frame.output = cast(BeforeTurnCtx, frame.slots[_CTX_SLOT])
+        return frame
+
+
+class _FanoutBeforeTurnCompletedModule:
+    slot = "before_turn.fanout_completed"
+    requires = ("before_turn.collect_exports", _CTX_SLOT)
+
+    def __init__(self, bus: EventBus) -> None:
+        self._bus = bus
+
+    async def run(self, frame: BeforeTurnFrame) -> BeforeTurnFrame:
+        ctx = cast(BeforeTurnCtx, frame.slots[_CTX_SLOT])
+        await self._bus.fanout(
+            PhaseCompleted(
+                phase="before_turn",
+                session_key=ctx.session_key,
+                channel=ctx.channel,
+                chat_id=ctx.chat_id,
+                input_summary={
+                    "message_chars": len(ctx.content or ""),
+                    "timestamp": ctx.timestamp.isoformat(),
+                },
+                output_summary={
+                    "skill_count": len(ctx.skill_names),
+                    "memory_block_chars": len(ctx.retrieved_memory_block or ""),
+                    "history_messages": len(ctx.history_messages),
+                    "extra_hint_count": len(ctx.extra_hints),
+                    "abort": ctx.abort,
+                },
+                metadata=dict(ctx.extra_metadata),
+            )
+        )
         return frame
 
 
@@ -150,6 +183,7 @@ def default_before_turn_modules(
         _BuildBeforeTurnCtxModule(),
         _EmitBeforeTurnCtxModule(bus),
         _CollectBeforeTurnExportSlotsModule(),
+        _FanoutBeforeTurnCompletedModule(bus),
         _ReturnBeforeTurnCtxModule(),
     ]
     return cast(

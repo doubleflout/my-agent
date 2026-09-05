@@ -15,6 +15,7 @@ from agent.lifecycle.phase import (
 from agent.lifecycle.types import PromptRenderCtx, PromptRenderInput, PromptRenderResult
 from agent.prompting import PromptSectionRender
 from bus.event_bus import EventBus
+from bus.events_lifecycle import PhaseCompleted
 
 if TYPE_CHECKING:
     from agent.context import ContextBuilder
@@ -135,10 +136,44 @@ class _CollectPromptExportSlotsModule:
 
 class _ReturnPromptRenderResultModule:
     slot = "prompt_render.return"
-    requires = ("prompt_render.render", _RESULT_SLOT)
+    requires = ("prompt_render.fanout_completed", _RESULT_SLOT)
 
     async def run(self, frame: PromptRenderFrame) -> PromptRenderFrame:
         frame.output = cast(PromptRenderResult, frame.slots[_RESULT_SLOT])
+        return frame
+
+
+class _FanoutPromptRenderCompletedModule:
+    slot = "prompt_render.fanout_completed"
+    requires = ("prompt_render.render", _CTX_SLOT, _RESULT_SLOT)
+
+    def __init__(self, bus: EventBus) -> None:
+        self._bus = bus
+
+    async def run(self, frame: PromptRenderFrame) -> PromptRenderFrame:
+        ctx = cast(PromptRenderCtx, frame.slots[_CTX_SLOT])
+        result = cast(PromptRenderResult, frame.slots[_RESULT_SLOT])
+        await self._bus.fanout(
+            PhaseCompleted(
+                phase="prompt_render",
+                session_key=ctx.session_key,
+                channel=ctx.channel,
+                chat_id=ctx.chat_id,
+                input_summary={
+                    "history_messages": len(ctx.history),
+                    "message_chars": len(ctx.content or ""),
+                    "skill_count": len(ctx.skill_names or []),
+                    "memory_block_chars": len(ctx.retrieved_memory_block or ""),
+                    "disabled_section_count": len(ctx.disabled_sections),
+                },
+                output_summary={
+                    "messages": len(result.messages),
+                    "extra_hint_count": len(ctx.extra_hints),
+                    "system_sections_top": len(ctx.system_sections_top),
+                    "system_sections_bottom": len(ctx.system_sections_bottom),
+                },
+            )
+        )
         return frame
 
 
@@ -152,6 +187,7 @@ def default_prompt_render_modules(
         _EmitPromptRenderCtxModule(bus),
         _CollectPromptExportSlotsModule(),
         _RenderPromptModule(context),
+        _FanoutPromptRenderCompletedModule(bus),
         _ReturnPromptRenderResultModule(),
     ]
     return cast(

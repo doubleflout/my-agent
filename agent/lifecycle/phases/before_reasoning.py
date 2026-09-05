@@ -14,6 +14,7 @@ from agent.lifecycle.phase import (
 )
 from agent.lifecycle.types import BeforeReasoningCtx, BeforeReasoningInput
 from bus.event_bus import EventBus
+from bus.events_lifecycle import PhaseCompleted
 
 if TYPE_CHECKING:
     from agent.context import ContextBuilder
@@ -143,10 +144,40 @@ class _CollectBeforeReasoningExportSlotsModule:
 
 class _ReturnBeforeReasoningCtxModule:
     slot = "before_reasoning.return"
-    requires = ("before_reasoning.warmup", _CTX_SLOT)
+    requires = ("before_reasoning.fanout_completed", _CTX_SLOT)
 
     async def run(self, frame: BeforeReasoningFrame) -> BeforeReasoningFrame:
         frame.output = cast(BeforeReasoningCtx, frame.slots[_CTX_SLOT])
+        return frame
+
+
+class _FanoutBeforeReasoningCompletedModule:
+    slot = "before_reasoning.fanout_completed"
+    requires = ("before_reasoning.warmup", _CTX_SLOT)
+
+    def __init__(self, bus: EventBus) -> None:
+        self._bus = bus
+
+    async def run(self, frame: BeforeReasoningFrame) -> BeforeReasoningFrame:
+        ctx = cast(BeforeReasoningCtx, frame.slots[_CTX_SLOT])
+        await self._bus.fanout(
+            PhaseCompleted(
+                phase="before_reasoning",
+                session_key=ctx.session_key,
+                channel=ctx.channel,
+                chat_id=ctx.chat_id,
+                input_summary={
+                    "message_chars": len(ctx.content or ""),
+                    "timestamp": ctx.timestamp.isoformat(),
+                },
+                output_summary={
+                    "skill_count": len(ctx.skill_names),
+                    "memory_block_chars": len(ctx.retrieved_memory_block or ""),
+                    "extra_hint_count": len(ctx.extra_hints),
+                    "abort": ctx.abort,
+                },
+            )
+        )
         return frame
 
 
@@ -163,6 +194,7 @@ def default_before_reasoning_modules(
         _EmitBeforeReasoningCtxModule(bus),
         _CollectBeforeReasoningExportSlotsModule(),
         _PromptWarmupModule(context),
+        _FanoutBeforeReasoningCompletedModule(bus),
         _ReturnBeforeReasoningCtxModule(),
     ]
     return cast(

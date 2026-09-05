@@ -50,6 +50,17 @@ class StreamDeltaReady:
     thinking_delta: str = ""
 
 
+@dataclass(frozen=True)
+class PhaseCompleted:
+    phase: str
+    session_key: str
+    channel: str
+    chat_id: str
+    input_summary: dict[str, Any] = field(default_factory=_empty_metadata)
+    output_summary: dict[str, Any] = field(default_factory=_empty_metadata)
+    metadata: dict[str, Any] = field(default_factory=_empty_metadata)
+
+
 @dataclass
 class BeforeReasoning:
     session_key: str

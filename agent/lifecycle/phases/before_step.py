@@ -16,6 +16,7 @@ from agent.lifecycle.phase import (
 )
 from agent.lifecycle.types import BeforeStepCtx, BeforeStepInput
 from bus.event_bus import EventBus
+from bus.events_lifecycle import PhaseCompleted
 
 
 @dataclass
@@ -104,10 +105,44 @@ class _CollectBeforeStepExportSlotsModule:
 
 class _ReturnBeforeStepCtxModule:
     slot = "before_step.return"
-    requires = ("before_step.inject_hints", _CTX_SLOT)
+    requires = ("before_step.fanout_completed", _CTX_SLOT)
 
     async def run(self, frame: BeforeStepFrame) -> BeforeStepFrame:
         frame.output = cast(BeforeStepCtx, frame.slots[_CTX_SLOT])
+        return frame
+
+
+class _FanoutBeforeStepCompletedModule:
+    slot = "before_step.fanout_completed"
+    requires = ("before_step.inject_hints", _CTX_SLOT)
+
+    def __init__(self, bus: EventBus) -> None:
+        self._bus = bus
+
+    async def run(self, frame: BeforeStepFrame) -> BeforeStepFrame:
+        ctx = cast(BeforeStepCtx, frame.slots[_CTX_SLOT])
+        await self._bus.fanout(
+            PhaseCompleted(
+                phase="before_step",
+                session_key=ctx.session_key,
+                channel=ctx.channel,
+                chat_id=ctx.chat_id,
+                input_summary={
+                    "iteration": ctx.iteration,
+                    "visible_tools": (
+                        len(ctx.visible_tool_names)
+                        if ctx.visible_tool_names is not None
+                        else None
+                    ),
+                },
+                output_summary={
+                    "input_tokens_estimate": ctx.input_tokens_estimate,
+                    "extra_hint_count": len(ctx.extra_hints),
+                    "early_stop": ctx.early_stop,
+                },
+                metadata={"iteration": ctx.iteration},
+            )
+        )
         return frame
 
 
@@ -120,6 +155,7 @@ def default_before_step_modules(
         _EmitBeforeStepCtxModule(bus),
         _CollectBeforeStepExportSlotsModule(),
         _InjectHintsModule(),
+        _FanoutBeforeStepCompletedModule(bus),
         _ReturnBeforeStepCtxModule(),
     ]
     return cast(

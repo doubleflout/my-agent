@@ -22,7 +22,7 @@ from agent.lifecycle.types import AfterTurnCtx, TurnSnapshot
 from agent.turns.outbound import OutboundDispatch, OutboundPort
 from bus.event_bus import EventBus
 from bus.events import OutboundMessage
-from bus.events_lifecycle import TurnCommitted
+from bus.events_lifecycle import PhaseCompleted, TurnCommitted
 
 if TYPE_CHECKING:
     from agent.context import ContextBuilder
@@ -252,10 +252,40 @@ class _DispatchOutboundModule:
 
 class _ReturnOutboundMessageModule:
     slot = "after_turn.return"
-    requires = ("after_turn.dispatch",)
+    requires = ("after_turn.fanout_completed",)
 
     async def run(self, frame: AfterTurnFrame) -> AfterTurnFrame:
         frame.output = frame.input.outbound
+        return frame
+
+
+class _FanoutAfterTurnCompletedModule:
+    slot = "after_turn.fanout_completed"
+    requires = ("after_turn.dispatch", _CTX_SLOT)
+
+    def __init__(self, bus: EventBus) -> None:
+        self._bus = bus
+
+    async def run(self, frame: AfterTurnFrame) -> AfterTurnFrame:
+        ctx = cast(AfterTurnCtx, frame.slots[_CTX_SLOT])
+        await self._bus.fanout(
+            PhaseCompleted(
+                phase="after_turn",
+                session_key=ctx.session_key,
+                channel=ctx.channel,
+                chat_id=ctx.chat_id,
+                input_summary={
+                    "will_dispatch": ctx.will_dispatch,
+                    "tool_count": len(ctx.tools_used),
+                },
+                output_summary={
+                    "reply_chars": len(ctx.reply or ""),
+                    "thinking_chars": len(ctx.thinking or ""),
+                    "dispatched": ctx.will_dispatch,
+                },
+                metadata=dict(ctx.extra_metadata),
+            )
+        )
         return frame
 
 
@@ -276,6 +306,7 @@ def default_after_turn_modules(
         _CollectAfterTurnTelemetrySlotsModule(),
         _FanoutAfterTurnCtxModule(bus),
         _DispatchOutboundModule(outbound),
+        _FanoutAfterTurnCompletedModule(bus),
         _ReturnOutboundMessageModule(),
     ]
     return cast(

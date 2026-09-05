@@ -78,6 +78,54 @@ open_observe_db = cast(
 _now = datetime.now()
 
 
+def test_default_phase_chains_include_phase_completed_fanout():
+    bus = EventBus()
+    session_mgr = SimpleNamespace(get_or_create=Mock())
+    ctx_store = SimpleNamespace(prepare=AsyncMock())
+    tools = Mock()
+    tools.set_context = Mock()
+    context_builder = Mock()
+    services = SimpleNamespace(
+        presence=None,
+        session_manager=SimpleNamespace(append_messages=AsyncMock()),
+    )
+
+    assert _slots(
+        default_before_turn_modules(
+            bus,
+            cast(SessionManager, session_mgr),
+            cast(ContextStore, ctx_store),
+        )
+    )[-2] == "before_turn.fanout_completed"
+    assert _slots(
+        default_before_reasoning_modules(
+            bus,
+            cast(ToolRegistry, tools),
+            cast(SessionManager, session_mgr),
+            cast(ContextBuilder, context_builder),
+        )
+    )[-2] == "before_reasoning.fanout_completed"
+    assert _slots(
+        default_prompt_render_modules(bus, cast(ContextBuilder, context_builder))
+    )[-2] == "prompt_render.fanout_completed"
+    assert _slots(default_before_step_modules(bus))[-2] == "before_step.fanout_completed"
+    assert _slots(default_after_step_modules(bus))[-2] == "after_step.fanout_completed"
+    assert _slots(
+        default_after_reasoning_modules(bus, cast(Any, services))
+    )[-2] == "after_reasoning.fanout_completed"
+    assert _slots(
+        default_after_turn_modules(
+            bus,
+            _DummyOutbound(),
+            cast(ContextBuilder, context_builder),
+        )
+    )[-2] == "after_turn.fanout_completed"
+
+
+def _slots(modules: list[object]) -> list[str]:
+    return [str(getattr(module, "slot")) for module in modules]
+
+
 class _MemoryStatusPluginModule:
     slot = "test.memory_status"
     requires = ("before_turn.acquire_session", "session:session")

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from agent.plugins import Plugin
-from bus.events_lifecycle import TurnCommitted
+from bus.events_lifecycle import PhaseCompleted, TurnCommitted
 
 logger = logging.getLogger("plugin.langsmith_trace")
 
@@ -33,6 +33,7 @@ class LangSmithTracePlugin(Plugin):
             project=str(getattr(config, "project", "") or "akashic-agent"),
         )
         self.context.event_bus.on(TurnCommitted, self._observe_turn_committed)
+        self.context.event_bus.on(PhaseCompleted, self._observe_phase_completed)
         logger.info("langsmith trace plugin loaded project=%s", self._recorder.project)
 
     def _observe_turn_committed(self, event: TurnCommitted) -> None:
@@ -44,6 +45,19 @@ class LangSmithTracePlugin(Plugin):
         except Exception:
             logger.exception(
                 "langsmith turn trace failed session=%s",
+                event.session_key,
+            )
+
+    def _observe_phase_completed(self, event: PhaseCompleted) -> None:
+        recorder = getattr(self, "_recorder", None)
+        if recorder is None:
+            return
+        try:
+            recorder.record_phase(event)
+        except Exception:
+            logger.exception(
+                "langsmith phase trace failed phase=%s session=%s",
+                event.phase,
                 event.session_key,
             )
 
@@ -73,6 +87,20 @@ class _TurnTraceRecorder:
 
         with self._tracing_context(enabled=True, project_name=self.project):
             return _record_turn(_turn_inputs(event))
+
+    def record_phase(self, event: PhaseCompleted) -> dict[str, object]:
+        metadata = _phase_metadata(event)
+
+        @self._traceable(
+            name=f"phase.{event.phase}",
+            run_type="chain",
+            metadata=metadata,
+        )
+        def _record_phase(payload: dict[str, object]) -> dict[str, object]:
+            return dict(event.output_summary)
+
+        with self._tracing_context(enabled=True, project_name=self.project):
+            return _record_phase(dict(event.input_summary))
 
 
 def _load_langsmith() -> tuple[Callable[..., Any], Callable[..., Any]]:
@@ -120,6 +148,17 @@ def _turn_metadata(event: TurnCommitted) -> dict[str, object]:
     turn_id = event.extra.get("turn_id")
     if turn_id:
         metadata["turn_id"] = str(turn_id)
+    return metadata
+
+
+def _phase_metadata(event: PhaseCompleted) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "phase": event.phase,
+        "session_key": event.session_key,
+        "channel": event.channel,
+        "chat_id": event.chat_id,
+    }
+    metadata.update(dict(event.metadata))
     return metadata
 
 

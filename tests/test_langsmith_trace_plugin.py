@@ -11,7 +11,7 @@ import pytest
 from agent.config_models import Config, EvalConfig, LangSmithEvalConfig
 from agent.plugins.manager import PluginManager
 from bus.event_bus import EventBus
-from bus.events_lifecycle import TurnCommitted
+from bus.events_lifecycle import PhaseCompleted, TurnCommitted
 
 
 def _config() -> Config:
@@ -132,3 +132,85 @@ async def test_langsmith_trace_plugin_records_turn_committed(tmp_path: Path, mon
         "react_stats": {"iteration_count": 1},
         "error": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_langsmith_trace_plugin_records_phase_completed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    calls: list[dict[str, object]] = []
+
+    fake_langsmith = types.ModuleType("langsmith")
+
+    def fake_traceable(*, name: str, run_type: str, metadata: dict[str, object] | None = None):
+        def decorate(fn):
+            def wrapper(payload):
+                outputs = fn(payload)
+                calls.append(
+                    {
+                        "name": name,
+                        "run_type": run_type,
+                        "metadata": metadata,
+                        "inputs": payload,
+                        "outputs": outputs,
+                    }
+                )
+                return outputs
+
+            return wrapper
+
+        return decorate
+
+    class FakeTracingContext:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    fake_langsmith.traceable = fake_traceable
+    fake_langsmith.tracing_context = lambda **kwargs: FakeTracingContext(**kwargs)
+    monkeypatch.setitem(sys.modules, "langsmith", fake_langsmith)
+
+    source = Path(__file__).parents[1] / "plugins" / "langsmith_trace"
+    plugin_root = tmp_path / "plugins"
+    shutil.copytree(source, plugin_root / "langsmith_trace")
+
+    bus = EventBus()
+    mgr = PluginManager(
+        plugin_dirs=[plugin_root],
+        event_bus=bus,
+        workspace=tmp_path,
+        app_config=_config(),
+    )
+
+    await mgr.load_all()
+    await bus.fanout(
+        PhaseCompleted(
+            phase="before_turn",
+            session_key="web:user-1:conversation-1",
+            channel="web",
+            chat_id="conversation-1",
+            input_summary={"message_chars": 2},
+            output_summary={"skill_count": 1},
+            metadata={"turn_id": "turn-1"},
+        )
+    )
+
+    await mgr.terminate_all()
+    await bus.aclose()
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["name"] == "phase.before_turn"
+    assert call["run_type"] == "chain"
+    assert call["metadata"] == {
+        "phase": "before_turn",
+        "session_key": "web:user-1:conversation-1",
+        "channel": "web",
+        "chat_id": "conversation-1",
+        "turn_id": "turn-1",
+    }
+    assert call["inputs"] == {"message_chars": 2}
+    assert call["outputs"] == {"skill_count": 1}

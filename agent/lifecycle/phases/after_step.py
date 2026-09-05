@@ -11,6 +11,7 @@ from agent.lifecycle.phase import (
     topo_sort_modules,
 )
 from agent.lifecycle.types import AfterStepCtx
+from bus.events_lifecycle import PhaseCompleted
 
 
 @dataclass
@@ -86,10 +87,43 @@ class _CollectAfterStepExportSlotsModule:
 
 class _ReturnAfterStepCtxModule:
     slot = "after_step.return"
-    requires = ("after_step.collect_post", _CTX_SLOT)
+    requires = ("after_step.fanout_completed", _CTX_SLOT)
 
     async def run(self, frame: AfterStepFrame) -> AfterStepFrame:
         frame.output = cast(AfterStepCtx, frame.slots[_CTX_SLOT])
+        return frame
+
+
+class _FanoutAfterStepCompletedModule:
+    slot = "after_step.fanout_completed"
+    requires = ("after_step.collect_post", _CTX_SLOT)
+
+    def __init__(self, bus: EventBus) -> None:
+        self._bus = bus
+
+    async def run(self, frame: AfterStepFrame) -> AfterStepFrame:
+        ctx = cast(AfterStepCtx, frame.slots[_CTX_SLOT])
+        await self._bus.fanout(
+            PhaseCompleted(
+                phase="after_step",
+                session_key=ctx.session_key,
+                channel=ctx.channel,
+                chat_id=ctx.chat_id,
+                input_summary={
+                    "iteration": ctx.iteration,
+                    "context_tokens_estimate": ctx.context_tokens_estimate,
+                },
+                output_summary={
+                    "tools_called": list(ctx.tools_called),
+                    "tools_used_so_far": list(ctx.tools_used_so_far),
+                    "partial_reply_chars": len(ctx.partial_reply or ""),
+                    "has_more": ctx.has_more,
+                    "early_stop": ctx.early_stop,
+                    "early_stop_reason": ctx.early_stop_reason,
+                },
+                metadata={"iteration": ctx.iteration, **dict(ctx.extra_metadata)},
+            )
+        )
         return frame
 
 
@@ -109,6 +143,7 @@ def default_after_step_modules(
             slot="after_step.collect_post",
             requires=("after_step.fanout", _CTX_SLOT),
         ),
+        _FanoutAfterStepCompletedModule(bus),
         _ReturnAfterStepCtxModule(),
     ]
     return cast(
