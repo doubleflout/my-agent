@@ -188,13 +188,14 @@ async def test_langsmith_trace_plugin_records_phase_completed(tmp_path: Path, mo
     await mgr.load_all()
     await bus.fanout(
         PhaseCompleted(
+            turn_id="turn-1",
             phase="before_turn",
             session_key="web:user-1:conversation-1",
             channel="web",
             chat_id="conversation-1",
             input_summary={"message_chars": 2},
             output_summary={"skill_count": 1},
-            metadata={"turn_id": "turn-1"},
+            metadata={"turn_id": "wrong-turn-id"},
         )
     )
 

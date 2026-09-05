@@ -183,6 +183,7 @@ class UserRuntimeAgentExecutor(AgentExecutor):
         conversation_id: str,
         session_key: str | None = None,
         on_stream_event: StreamEventHandler | None = None,
+        turn_id: str | None = None,
     ) -> str:
         runtime = await self.runtime_manager.get_runtime(user_id)
         actual_session_key = session_key or web_session_key(user_id, conversation_id)
@@ -192,13 +193,16 @@ class UserRuntimeAgentExecutor(AgentExecutor):
                 if str(getattr(msg, "session_key", "")) == actual_session_key
                 else None
             )
-        return await runtime.loop.process_direct(
-            content=content,
-            session_key=actual_session_key,
-            channel="web",
-            chat_id=conversation_id,
-            stream_events=on_stream_event is not None,
-        )
+        run_kwargs = {
+            "content": content,
+            "session_key": actual_session_key,
+            "channel": "web",
+            "chat_id": conversation_id,
+            "stream_events": on_stream_event is not None,
+        }
+        if turn_id:
+            run_kwargs["turn_id"] = turn_id
+        return await runtime.loop.process_direct(**run_kwargs)
 
 
 class UserRuntimeProactiveRunner:

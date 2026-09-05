@@ -118,6 +118,7 @@ class _BuildTurnCommittedModule:
         tool_chain_list = cast(list[dict[str, Any]], frame.slots[_TOOL_CHAIN_SLOT])
         omit_user_turn = bool(frame.slots[_OMIT_USER_TURN_SLOT])
         frame.slots[_TURN_COMMITTED_SLOT] = TurnCommitted(
+            turn_id=state.turn_id,
             session_key=state.session_key,
             channel=msg.channel,
             chat_id=msg.chat_id,
@@ -270,6 +271,7 @@ class _FanoutAfterTurnCompletedModule:
         ctx = cast(AfterTurnCtx, frame.slots[_CTX_SLOT])
         await self._bus.fanout(
             PhaseCompleted(
+                turn_id=frame.input.state.turn_id,
                 phase="after_turn",
                 session_key=ctx.session_key,
                 channel=ctx.channel,

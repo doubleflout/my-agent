@@ -32,6 +32,7 @@ class TurnState:
     dispatch_outbound: bool
     session: SessionLike | None = None
     extra_metadata: dict[str, Any] = field(default_factory=_empty_metadata)
+    turn_id: str = ""
 
 
 @dataclass
@@ -91,6 +92,7 @@ class PromptRenderInput:
     disabled_sections: set[str]
     turn_injection_prompt: str
     extra_hints: list[str] | None = None
+    turn_id: str = ""
 
 
 @dataclass
@@ -131,6 +133,7 @@ class BeforeStepInput:
     iteration: int
     messages: list[dict[str, Any]]
     visible_names: set[str] | None
+    turn_id: str = ""
 
 
 @dataclass
@@ -166,6 +169,7 @@ class AfterStepCtx:
     early_stop: bool = False
     early_stop_reason: str = ""
     extra_metadata: dict[str, Any] = field(default_factory=_empty_metadata)
+    turn_id: str = ""
 
 
 @dataclass(frozen=True)

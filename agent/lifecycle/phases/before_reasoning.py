@@ -162,6 +162,7 @@ class _FanoutBeforeReasoningCompletedModule:
         ctx = cast(BeforeReasoningCtx, frame.slots[_CTX_SLOT])
         await self._bus.fanout(
             PhaseCompleted(
+                turn_id=frame.input.state.turn_id,
                 phase="before_reasoning",
                 session_key=ctx.session_key,
                 channel=ctx.channel,

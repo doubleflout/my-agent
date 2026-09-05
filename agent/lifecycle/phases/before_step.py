@@ -123,6 +123,7 @@ class _FanoutBeforeStepCompletedModule:
         ctx = cast(BeforeStepCtx, frame.slots[_CTX_SLOT])
         await self._bus.fanout(
             PhaseCompleted(
+                turn_id=frame.input.turn_id,
                 phase="before_step",
                 session_key=ctx.session_key,
                 channel=ctx.channel,

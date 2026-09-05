@@ -241,6 +241,7 @@ class _FanoutAfterReasoningCompletedModule:
         outbound = cast(OutboundMessage, frame.slots[_OUTBOUND_SLOT])
         await self._bus.fanout(
             PhaseCompleted(
+                turn_id=frame.input.state.turn_id,
                 phase="after_reasoning",
                 session_key=ctx.session_key,
                 channel=ctx.channel,

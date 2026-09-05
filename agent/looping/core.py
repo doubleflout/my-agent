@@ -14,6 +14,7 @@ from agent.core.passive_turn import (
     DefaultReasoner,
 )
 from agent.looping.interrupt import InterruptResult, TurnInterruptState
+from agent.lifecycle.turn_id import resolve_passive_turn_id
 from agent.core.runner import CoreRunner, CoreRunnerDeps
 from agent.core.runtime_support import ToolDiscoveryState
 from agent.looping.ports import (
@@ -559,6 +560,14 @@ class AgentLoop:
                 chat_id=msg.chat_id,
                 content=_item_content(msg),
                 timestamp=msg.timestamp,
+                turn_id=(
+                    str((msg.metadata or {}).get("turn_id") or "")
+                    if isinstance(msg, InboundMessage)
+                    else resolve_passive_turn_id(
+                        session_key=key,
+                        timestamp=msg.timestamp,
+                    )
+                ),
             )
         )
 
@@ -575,6 +584,12 @@ class AgentLoop:
 
         # 1. 先处理可能存在的续跑态，并发布 turn started。
         msg, resumed_from_interrupt = self._resume_interrupted_message(msg, key)
+        if isinstance(msg, InboundMessage):
+            msg.metadata["turn_id"] = resolve_passive_turn_id(
+                session_key=key,
+                timestamp=msg.timestamp,
+                metadata=msg.metadata,
+            )
         await self._observe_turn_started(msg, key)
         content = _item_content(msg)
         preview = content[:60] + "..." if len(content) > 60 else content
@@ -608,6 +623,7 @@ class AgentLoop:
         skip_post_memory: bool = False,
         stream_events: bool = False,
         disabled_tools: list[str] | None = None,
+        turn_id: str | None = None,
     ) -> str:
         metadata: dict[str, object] = {}
         if omit_user_turn:
@@ -618,6 +634,8 @@ class AgentLoop:
             metadata["suppress_stream_events"] = True
         if disabled_tools:
             metadata["disabled_tools"] = list(disabled_tools)
+        if turn_id:
+            metadata["turn_id"] = turn_id
         msg = InboundMessage(
             channel=channel,
             sender="user",

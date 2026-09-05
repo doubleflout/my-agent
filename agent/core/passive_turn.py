@@ -65,6 +65,7 @@ from agent.lifecycle.types import (
     TurnSnapshot,
     TurnState,
 )
+from agent.lifecycle.turn_id import resolve_passive_turn_id
 
 if TYPE_CHECKING:
     from agent.context import ContextBuilder
@@ -345,10 +346,16 @@ class PassiveTurnPipeline:
         *,
         dispatch_outbound: bool = True,
     ) -> OutboundMessage:
+        turn_id = resolve_passive_turn_id(
+            session_key=key,
+            timestamp=msg.timestamp,
+            metadata=msg.metadata,
+        )
         state = TurnState(
             msg=msg,
             session_key=key,
             dispatch_outbound=dispatch_outbound,
+            turn_id=turn_id,
         )
         # try/except 只包前置模块链和 reasoning：在派发前兜底并返回错误提示。
         try:
@@ -386,6 +393,7 @@ class PassiveTurnPipeline:
                 raise RuntimeError("Passive turn requires TurnState.session")
             turn_result = await self._reasoner.run_turn(
                 msg=msg,
+                turn_id=state.turn_id,
                 skill_names=list(before_reasoning.skill_names) or None,
                 session=session,
                 base_history=None,
@@ -426,11 +434,17 @@ class PassiveTurnPipeline:
         *,
         dispatch_outbound: bool = True,
     ) -> OutboundMessage:
+        turn_id = resolve_passive_turn_id(
+            session_key=session_key,
+            timestamp=msg.timestamp,
+            metadata=msg.metadata,
+        )
         state = TurnState(
             msg=msg,
             session_key=session_key,
             dispatch_outbound=dispatch_outbound,
             session=self._session.session_manager.get_or_create(session_key),
+            turn_id=turn_id,
         )
         after_reasoning = await self._after_reasoning.run(
             AfterReasoningInput(state=state, turn_result=turn_result)
@@ -550,6 +564,7 @@ class Reasoner(ABC):
         self,
         initial_messages: list[dict],
         *,
+        turn_id: str = "",
         request_time: datetime | None = None,
         preloaded_tools: set[str] | None = None,
         preloaded_tool_order: list[str] | None = None,
@@ -568,6 +583,7 @@ class Reasoner(ABC):
         *,
         msg,
         session: "SessionLike",
+        turn_id: str = "",
         skill_names: list[str] | None = None,
         base_history: list[dict] | None = None,
         retrieved_memory_block: str = "",
@@ -735,6 +751,7 @@ class DefaultReasoner(Reasoner):
         *,
         msg,
         session: "SessionLike",
+        turn_id: str = "",
         skill_names: list[str] | None = None,
         base_history: list[dict] | None = None,
         retrieved_memory_block: str = "",
@@ -812,6 +829,7 @@ class DefaultReasoner(Reasoner):
                     disabled_sections=plan["disabled_sections"],
                     turn_injection_prompt=turn_injection_prompt,
                     extra_hints=extra_hints,
+                    turn_id=turn_id,
                 )
             )
             initial_messages = prompt_render.messages
@@ -821,6 +839,7 @@ class DefaultReasoner(Reasoner):
             try:
                 result = await self.run(
                     initial_messages,
+                    turn_id=turn_id,
                     request_time=msg.timestamp,
                     preloaded_tools=preloaded,
                     preloaded_tool_order=preloaded_order,
@@ -917,6 +936,7 @@ class DefaultReasoner(Reasoner):
         self,
         initial_messages: list[dict],
         *,
+        turn_id: str = "",
         request_time: datetime | None = None,
         preloaded_tools: set[str] | None = None,
         preloaded_tool_order: list[str] | None = None,
@@ -929,10 +949,11 @@ class DefaultReasoner(Reasoner):
     ) -> ReasonerResult:
         # 1. 初始化消息上下文、本轮工具轨迹。
         messages = initial_messages
-        turn_id = "passive:{}:{}".format(
-            tool_event_session_key or tool_event_channel or "unknown",
-            request_time.isoformat() if request_time is not None else id(initial_messages),
-        )
+        if not turn_id:
+            turn_id = "passive:{}:{}".format(
+                tool_event_session_key or tool_event_channel or "unknown",
+                request_time.isoformat() if request_time is not None else id(initial_messages),
+            )
         tools_used: list[str] = []
         tools_unlocked: list[str] = []
         tool_chain: list[dict[str, Any]] = []
@@ -978,6 +999,7 @@ class DefaultReasoner(Reasoner):
                 iteration=iteration,
                 messages=messages,
                 visible_names=visible_names,
+                turn_id=turn_id,
             ))
             if step_ctx.early_stop:
                 summary = await self._summarize_incomplete_progress(
@@ -1416,6 +1438,7 @@ class DefaultReasoner(Reasoner):
                     tool_chain_partial=tuple(tool_chain),
                     partial_thinking=response.thinking,
                     has_more=True,
+                    turn_id=turn_id,
                 ))
                 if after_step.early_stop:
                     reason = after_step.early_stop_reason or "after_step"
@@ -1496,6 +1519,7 @@ class DefaultReasoner(Reasoner):
                 tool_chain_partial=tuple(tool_chain),
                 partial_thinking=response.thinking,
                 has_more=False,
+                turn_id=turn_id,
             ))
             return self._build_result(
                 reply=response.content or "（无响应）",

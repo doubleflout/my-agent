@@ -105,6 +105,7 @@ class _FanoutAfterStepCompletedModule:
         ctx = cast(AfterStepCtx, frame.slots[_CTX_SLOT])
         await self._bus.fanout(
             PhaseCompleted(
+                turn_id=ctx.turn_id,
                 phase="after_step",
                 session_key=ctx.session_key,
                 channel=ctx.channel,

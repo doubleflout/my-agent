@@ -145,20 +145,22 @@ def _turn_metadata(event: TurnCommitted) -> dict[str, object]:
         "channel": event.channel,
         "chat_id": event.chat_id,
     }
-    turn_id = event.extra.get("turn_id")
+    turn_id = event.turn_id or event.extra.get("turn_id")
     if turn_id:
         metadata["turn_id"] = str(turn_id)
     return metadata
 
 
 def _phase_metadata(event: PhaseCompleted) -> dict[str, object]:
-    metadata: dict[str, object] = {
+    metadata: dict[str, object] = dict(event.metadata)
+    metadata.update({
         "phase": event.phase,
         "session_key": event.session_key,
         "channel": event.channel,
         "chat_id": event.chat_id,
-    }
-    metadata.update(dict(event.metadata))
+    })
+    if event.turn_id:
+        metadata["turn_id"] = event.turn_id
     return metadata
 
 

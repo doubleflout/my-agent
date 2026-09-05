@@ -39,6 +39,7 @@ class TurnStarted:
     chat_id: str
     content: str
     timestamp: datetime
+    turn_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class PhaseCompleted:
     input_summary: dict[str, Any] = field(default_factory=_empty_metadata)
     output_summary: dict[str, Any] = field(default_factory=_empty_metadata)
     metadata: dict[str, Any] = field(default_factory=_empty_metadata)
+    turn_id: str = ""
 
 
 @dataclass
@@ -92,6 +94,7 @@ class TurnCommitted:
     post_reply_budget: dict[str, int] = field(default_factory=_empty_int_metadata)
     react_stats: dict[str, int] = field(default_factory=_empty_int_metadata)
     extra: dict[str, Any] = field(default_factory=_empty_metadata)
+    turn_id: str = ""
 
 
 @dataclass(frozen=True)

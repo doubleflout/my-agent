@@ -155,6 +155,7 @@ class _FanoutPromptRenderCompletedModule:
         result = cast(PromptRenderResult, frame.slots[_RESULT_SLOT])
         await self._bus.fanout(
             PhaseCompleted(
+                turn_id=frame.input.turn_id,
                 phase="prompt_render",
                 session_key=ctx.session_key,
                 channel=ctx.channel,

@@ -19,6 +19,7 @@ class AgentExecutor(Protocol):
         conversation_id: str,
         session_key: str | None = None,
         on_stream_event: StreamEventHandler | None = None,
+        turn_id: str | None = None,
     ) -> str:
         ...
 
@@ -35,6 +36,7 @@ class AgentLoopExecutor:
         conversation_id: str,
         session_key: str | None = None,
         on_stream_event: StreamEventHandler | None = None,
+        turn_id: str | None = None,
     ) -> str:
         actual_session_key = session_key or web_session_key(user_id, conversation_id)
         if on_stream_event is not None:
@@ -43,10 +45,15 @@ class AgentLoopExecutor:
                 if str(getattr(msg, "session_key", "")) == actual_session_key
                 else None
             )
+        run_kwargs = {
+            "content": content,
+            "session_key": actual_session_key,
+            "channel": "web",
+            "chat_id": conversation_id,
+            "stream_events": on_stream_event is not None,
+        }
+        if turn_id:
+            run_kwargs["turn_id"] = turn_id
         return await self._agent_loop.process_direct(
-            content=content,
-            session_key=actual_session_key,
-            channel="web",
-            chat_id=conversation_id,
-            stream_events=on_stream_event is not None,
+            **run_kwargs,
         )
