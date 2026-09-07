@@ -21,10 +21,11 @@ from core.memory.engine import (
     MemoryIngestRequest,
     MemoryHit,
     MemoryScope,
+    ExplicitRetrievalRequest,
     RememberRequest,
     RememberResult,
 )
-from core.memory.events import ConsolidationCommitted, TurnIngested
+from core.memory.events import ConsolidationCommitted, RetrievalCompleted, TurnIngested
 from core.memory.markdown import (
     ConsolidateRequest,
     ConsolidateResult,
@@ -147,6 +148,51 @@ async def test_default_memory_engine_retrieve_keeps_raw_items_and_mode_trace():
     assert result.hits[0].injected is True
 
 
+async def test_default_memory_engine_retrieve_publishes_retrieval_completed_event():
+    event_bus = EventBus()
+    observed: list[RetrievalCompleted] = []
+    event_bus.on(RetrievalCompleted, observed.append)
+    retriever = SimpleNamespace(
+        retrieve=AsyncMock(
+            return_value=[
+                {
+                    "id": "pref1",
+                    "summary": "用户喜欢中文回答",
+                    "score": 0.9,
+                    "source_ref": "cli:1@seed",
+                    "memory_type": "preference",
+                    "extra_json": {"origin": "test"},
+                }
+            ]
+        ),
+        build_injection_block=lambda items: ("记忆块", ["pref1"]),
+    )
+    engine = _make_default_engine(
+        retriever=cast(Any, retriever),
+        event_publisher=event_bus,
+    )
+
+    await engine.retrieve(
+        MemoryEngineRetrieveRequest(
+            query="用户喜欢什么语言",
+            scope=MemoryScope(session_key="cli:1", channel="cli", chat_id="1"),
+            hints={"queries": ["用户喜欢什么语言", "中文回答"]},
+            top_k=3,
+        )
+    )
+
+    assert len(observed) == 1
+    event = observed[0]
+    assert event.session_key == "cli:1"
+    assert event.channel == "cli"
+    assert event.chat_id == "1"
+    assert event.query == "用户喜欢什么语言"
+    assert event.aux_queries == ["中文回答"]
+    assert event.injected_count == 1
+    assert event.hits[0].item_id == "pref1"
+    assert event.hits[0].injected is True
+
+
 async def test_default_memory_engine_retrieve_falls_back_to_session_scope():
     retriever = SimpleNamespace(
         retrieve=AsyncMock(return_value=[]),
@@ -167,6 +213,50 @@ async def test_default_memory_engine_retrieve_falls_back_to_session_scope():
     assert kwargs["scope_chat_id"] == "test_user"
     assert kwargs["require_scope_match"] is True
     assert "keyword_only_enabled" not in kwargs
+
+
+async def test_default_memory_engine_explicit_retrieve_publishes_retrieval_completed_event():
+    event_bus = EventBus()
+    observed: list[RetrievalCompleted] = []
+    event_bus.on(RetrievalCompleted, observed.append)
+    retriever = SimpleNamespace(
+        retrieve=AsyncMock(
+            return_value=[
+                {
+                    "id": "event1",
+                    "summary": "用户说上周去了杭州",
+                    "score": 0.87,
+                    "source_ref": "cli:1@seed",
+                    "memory_type": "event",
+                    "extra_json": {"origin": "test"},
+                }
+            ]
+        ),
+    )
+    engine = _make_default_engine(
+        retriever=cast(Any, retriever),
+        event_publisher=event_bus,
+    )
+    engine._gen_hypothesis = AsyncMock(side_effect=["用户上周去了杭州", "杭州旅行"])
+
+    await engine.retrieve_explicit(
+        ExplicitRetrievalRequest(
+            query="我上周去了哪里",
+            scope=MemoryScope(session_key="cli:1", channel="cli", chat_id="1"),
+            limit=2,
+        )
+    )
+
+    assert len(observed) == 1
+    event = observed[0]
+    assert event.session_key == "cli:1"
+    assert event.channel == "cli"
+    assert event.chat_id == "1"
+    assert event.query == "我上周去了哪里"
+    assert event.aux_queries == ["用户上周去了杭州", "杭州旅行"]
+    assert event.injected_count == 1
+    assert event.hits[0].item_id == "event1"
+    assert event.hits[0].memory_type == "event"
 
 
 async def test_default_engine_keeps_history_injected_ids():

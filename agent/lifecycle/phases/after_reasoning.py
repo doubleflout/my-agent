@@ -20,6 +20,7 @@ from agent.lifecycle.types import (
 )
 from bus.event_bus import EventBus
 from bus.events import OutboundMessage
+from bus.events_lifecycle import PhaseCompleted
 
 if TYPE_CHECKING:
     from agent.looping.ports import SessionServices
@@ -218,12 +219,62 @@ class _BuildOutboundMessageModule:
 
 class _ReturnAfterReasoningResultModule:
     slot = "after_reasoning.return"
-    requires = ("after_reasoning.build_outbound", _CTX_SLOT, _OUTBOUND_SLOT)
+    requires = ("after_reasoning.fanout_completed", _CTX_SLOT, _OUTBOUND_SLOT)
 
     async def run(self, frame: AfterReasoningFrame) -> AfterReasoningFrame:
         frame.output = AfterReasoningResult(
             ctx=cast(AfterReasoningCtx, frame.slots[_CTX_SLOT]),
             outbound=cast(OutboundMessage, frame.slots[_OUTBOUND_SLOT]),
+        )
+        return frame
+
+
+class _FanoutAfterReasoningCompletedModule:
+    slot = "after_reasoning.fanout_completed"
+    requires = ("after_reasoning.build_outbound", _CTX_SLOT, _OUTBOUND_SLOT)
+
+    def __init__(self, bus: EventBus) -> None:
+        self._bus = bus
+
+    async def run(self, frame: AfterReasoningFrame) -> AfterReasoningFrame:
+        ctx = cast(AfterReasoningCtx, frame.slots[_CTX_SLOT])
+        outbound = cast(OutboundMessage, frame.slots[_OUTBOUND_SLOT])
+        await self._bus.fanout(
+            PhaseCompleted(
+                turn_id=frame.input.state.turn_id,
+                phase="after_reasoning",
+                session_key=ctx.session_key,
+                channel=ctx.channel,
+                chat_id=ctx.chat_id,
+                input_summary={
+                    "raw_response": ctx.response_metadata.raw_text,
+                    "thinking": ctx.thinking,
+                    "tools_used": list(ctx.tools_used),
+                    "tool_count": len(ctx.tools_used),
+                    "tool_chain": list(ctx.tool_chain),
+                    "tool_chain_steps": len(ctx.tool_chain),
+                    "streamed": ctx.streamed,
+                    "context_retry": dict(ctx.context_retry),
+                },
+                output_summary={
+                    "reply": ctx.reply,
+                    "reply_chars": len(ctx.reply or ""),
+                    "media": list(ctx.media),
+                    "media_count": len(ctx.media),
+                    "meme_tag": ctx.meme_tag,
+                    "outbound": {
+                        "channel": outbound.channel,
+                        "chat_id": outbound.chat_id,
+                        "content": outbound.content,
+                        "thinking": outbound.thinking,
+                        "media": list(outbound.media),
+                        "metadata": dict(outbound.metadata),
+                    },
+                    "outbound_chars": len(outbound.content or ""),
+                    "outbound_media_count": len(outbound.media),
+                },
+                metadata=dict(ctx.outbound_metadata),
+            )
         )
         return frame
 
@@ -241,6 +292,7 @@ def default_after_reasoning_modules(
         _UpdateSessionMetadataModule(),
         _AppendMessagesModule(session_services),
         _BuildOutboundMessageModule(),
+        _FanoutAfterReasoningCompletedModule(bus),
         _ReturnAfterReasoningResultModule(),
     ]
     return cast(

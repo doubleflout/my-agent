@@ -688,6 +688,7 @@ def create_web_app(
                 "user_id": user_id,
                 "conversation_id": conversation_id,
                 "session_key": session_key,
+                "turn_id": turn_id,
             }
             if _executor_accepts_stream_events(executor):
                 run_kwargs["on_stream_event"] = publish_stream

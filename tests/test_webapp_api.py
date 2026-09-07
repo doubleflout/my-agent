@@ -25,6 +25,7 @@ class FakeExecutor:
         user_id: str,
         conversation_id: str,
         session_key: str | None = None,
+        turn_id: str | None = None,
     ) -> str:
         self.calls.append(
             {
@@ -32,6 +33,7 @@ class FakeExecutor:
                 "user_id": user_id,
                 "conversation_id": conversation_id,
                 "session_key": session_key or "",
+                "turn_id": turn_id or "",
             }
         )
         if self.delay:
@@ -49,6 +51,7 @@ class StreamingFakeExecutor(FakeExecutor):
         user_id: str,
         conversation_id: str,
         session_key: str | None = None,
+        turn_id: str | None = None,
         on_stream_event=None,
     ) -> str:
         self.calls.append(
@@ -57,6 +60,7 @@ class StreamingFakeExecutor(FakeExecutor):
                 "user_id": user_id,
                 "conversation_id": conversation_id,
                 "session_key": session_key or "",
+                "turn_id": turn_id or "",
             }
         )
         if on_stream_event is not None:
@@ -602,6 +606,7 @@ async def test_conversation_isolation_and_session_key(tmp_path):
         await wait_for_executor_call(executor)
         user_id = executor.calls[0]["user_id"]
         assert body["session_key"] == web_session_key(user_id, conv_a)
+        assert executor.calls[0]["turn_id"] == body["turn_id"]
 
 
 async def test_turn_stream_done_and_returns_pending_user_message(tmp_path):

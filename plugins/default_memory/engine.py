@@ -34,7 +34,12 @@ from core.memory.engine import (
     RememberRequest,
     RememberResult,
 )
-from core.memory.events import ConsolidationCommitted, TurnIngested
+from core.memory.events import (
+    ConsolidationCommitted,
+    RetrievalCompleted,
+    RetrievalHitSummary,
+    TurnIngested,
+)
 from core.net.http import SharedHttpResources
 from memory2.embedder import Embedder
 from memory2.memorizer import Memorizer
@@ -711,6 +716,18 @@ class DefaultMemoryEngine:
             for item in items
             if isinstance(item, dict)
         ]
+        retrieval_event = RetrievalCompleted(
+            session_key=scope.session_key or request.scope.session_key,
+            channel=scope.channel,
+            chat_id=scope.chat_id,
+            query=request.query,
+            orig_query=None,
+            aux_queries=queries[1:],
+            hits=[self._to_retrieval_hit_summary(hit) for hit in hits],
+            injected_count=sum(1 for hit in hits if hit.injected),
+            route_decision=str(request.hints.get("route_decision") or "") or None,
+        )
+        await self._publish_retrieval_completed(retrieval_event)
         return MemoryEngineRetrieveResult(
             text_block=text_block,
             hits=hits,
@@ -719,7 +736,7 @@ class DefaultMemoryEngine:
                 "profile": self.DESCRIPTOR.profile.value,
                 "mode": request.mode,
             },
-            raw={"items": items},
+            raw={"items": items, "retrieval_event": retrieval_event},
         )
 
     # post-response 摄入入口：外部只提交对话内容，失效判断仍在 engine 内部完成。
@@ -1113,6 +1130,24 @@ class DefaultMemoryEngine:
             keyword_enabled=True,
         )
         sliced = list(hits)[: request.limit]
+        retrieval_event = RetrievalCompleted(
+            session_key=request.scope.session_key,
+            channel=request.scope.channel,
+            chat_id=request.scope.chat_id,
+            query=request.query,
+            orig_query=None,
+            aux_queries=aux_queries,
+            hits=[
+                self._to_retrieval_hit_summary(
+                    self._build_hit(item, injected_ids=[str(item.get("id", "") or "")])
+                )
+                for item in sliced
+                if isinstance(item, dict)
+            ],
+            injected_count=len(sliced),
+            route_decision=None,
+        )
+        await self._publish_retrieval_completed(retrieval_event)
         return ExplicitRetrievalResult(
             hits=sliced,
             trace={
@@ -1121,7 +1156,7 @@ class DefaultMemoryEngine:
                 "hit_count": len(sliced),
                 "hyde_hypotheses": aux_queries,
             },
-            raw={"hits": sliced},
+            raw={"hits": sliced, "retrieval_event": retrieval_event},
         )
 
     def _retrieve_explicit_grep(
@@ -1229,6 +1264,37 @@ class DefaultMemoryEngine:
             metadata=metadata,
             injected=item_id in set(injected_ids or []),
         )
+
+    @staticmethod
+    def _to_retrieval_hit_summary(hit: MemoryHit) -> RetrievalHitSummary:
+        memory_type = str(hit.metadata.get("memory_type", "") or "")
+        confidence_label = str(hit.metadata.get("confidence_label", "") or "")
+        return RetrievalHitSummary(
+            item_id=hit.id,
+            memory_type=memory_type,
+            score=hit.score,
+            summary=hit.summary,
+            injected=hit.injected,
+            confidence_label=confidence_label,
+            forced=bool(hit.metadata.get("forced", False)),
+        )
+
+    async def _publish_retrieval_completed(
+        self,
+        event: RetrievalCompleted,
+    ) -> None:
+        if self._event_bus is None:
+            return
+        logger.info(
+            "[memory.retrieval] completed session=%s query=%r hits=%d injected=%d route=%s error=%s",
+            event.session_key,
+            event.query[:80],
+            len(event.hits),
+            event.injected_count,
+            event.route_decision or "",
+            event.error or "",
+        )
+        await self._event_bus.fanout(event)
 
     @staticmethod
     def _resolve_scope(scope):

@@ -21,7 +21,7 @@ from agent.lifecycle.phase import Phase
 from agent.tools.registry import ToolRegistry
 from bus.event_bus import EventBus
 from bus.events import InboundMessage, OutboundMessage
-from bus.events_lifecycle import TurnCommitted
+from bus.events_lifecycle import PhaseCompleted, TurnCommitted
 from agent.lifecycle.types import (
     AfterReasoningCtx,
     AfterReasoningInput,
@@ -76,6 +76,54 @@ open_observe_db = cast(
 )
 
 _now = datetime.now()
+
+
+def test_default_phase_chains_include_phase_completed_fanout():
+    bus = EventBus()
+    session_mgr = SimpleNamespace(get_or_create=Mock())
+    ctx_store = SimpleNamespace(prepare=AsyncMock())
+    tools = Mock()
+    tools.set_context = Mock()
+    context_builder = Mock()
+    services = SimpleNamespace(
+        presence=None,
+        session_manager=SimpleNamespace(append_messages=AsyncMock()),
+    )
+
+    assert _slots(
+        default_before_turn_modules(
+            bus,
+            cast(SessionManager, session_mgr),
+            cast(ContextStore, ctx_store),
+        )
+    )[-2] == "before_turn.fanout_completed"
+    assert _slots(
+        default_before_reasoning_modules(
+            bus,
+            cast(ToolRegistry, tools),
+            cast(SessionManager, session_mgr),
+            cast(ContextBuilder, context_builder),
+        )
+    )[-2] == "before_reasoning.fanout_completed"
+    assert _slots(
+        default_prompt_render_modules(bus, cast(ContextBuilder, context_builder))
+    )[-2] == "prompt_render.fanout_completed"
+    assert _slots(default_before_step_modules(bus))[-2] == "before_step.fanout_completed"
+    assert _slots(default_after_step_modules(bus))[-2] == "after_step.fanout_completed"
+    assert _slots(
+        default_after_reasoning_modules(bus, cast(Any, services))
+    )[-2] == "after_reasoning.fanout_completed"
+    assert _slots(
+        default_after_turn_modules(
+            bus,
+            _DummyOutbound(),
+            cast(ContextBuilder, context_builder),
+        )
+    )[-2] == "after_turn.fanout_completed"
+
+
+def _slots(modules: list[object]) -> list[str]:
+    return [str(getattr(module, "slot")) for module in modules]
 
 
 class _MemoryStatusPluginModule:
@@ -867,6 +915,8 @@ async def test_before_reasoning_chain_modify_skill_names_used_in_finalize_render
 @pytest.mark.asyncio
 async def test_before_step_setup_records_token_estimate():
     bus = EventBus()
+    completed: list[PhaseCompleted] = []
+    bus.on(PhaseCompleted, lambda event: completed.append(event))
     phase = Phase(default_before_step_modules(bus), frame_factory=BeforeStepFrame)
     messages = [{"role": "user", "content": "hello"}]
 
@@ -882,11 +932,14 @@ async def test_before_step_setup_records_token_estimate():
     )
 
     assert ctx.input_tokens_estimate > 0
+    assert completed[0].input_summary["messages"] == messages
 
 
 @pytest.mark.asyncio
 async def test_prompt_render_chain_appends_bottom_section(tmp_path):
     bus = EventBus()
+    completed: list[PhaseCompleted] = []
+    bus.on(PhaseCompleted, lambda event: completed.append(event))
 
     async def append_section(ctx: PromptRenderCtx) -> PromptRenderCtx:
         ctx.system_sections_bottom.append(
@@ -928,6 +981,12 @@ async def test_prompt_render_chain_appends_bottom_section(tmp_path):
     )
 
     assert "Plugin Protocol" in str(result.messages[0]["content"])
+    assert completed[0].input_summary["message"] == "hello"
+    assert completed[0].output_summary["rendered_messages"] == result.messages
+    assert (
+        completed[0].output_summary["system_sections_bottom_details"][0].name
+        == "plugin_protocol"
+    )
 
 
 @pytest.mark.asyncio
@@ -1132,11 +1191,13 @@ async def test_before_step_finalize_early_stop():
 async def test_after_step_phase_runs_observers():
     bus = EventBus()
     side_effect: list[str] = []
+    completed: list[PhaseCompleted] = []
 
     async def handler(ctx: AfterStepCtx) -> None:
         side_effect.append(ctx.partial_reply)
 
     bus.on(AfterStepCtx, handler)
+    bus.on(PhaseCompleted, lambda event: completed.append(event))
     phase = Phase(default_after_step_modules(bus), frame_factory=AfterStepFrame)
     await phase.run(
         AfterStepCtx(
@@ -1155,6 +1216,7 @@ async def test_after_step_phase_runs_observers():
     )
 
     assert side_effect == ["ok"]
+    assert completed[0].output_summary["partial_reply"] == "ok"
 
 
 @pytest.mark.asyncio
@@ -1240,9 +1302,12 @@ async def test_after_reasoning_collects_persist_and_outbound_slots():
         streamed=False,
         context_retry={},
     )
+    bus = EventBus()
+    completed: list[PhaseCompleted] = []
+    bus.on(PhaseCompleted, lambda event: completed.append(event))
     phase = Phase(
         default_after_reasoning_modules(
-            EventBus(),
+            bus,
             cast(Any, services),
             plugin_modules=[SlotModule()],
         ),
@@ -1256,12 +1321,15 @@ async def test_after_reasoning_collects_persist_and_outbound_slots():
     assert result.outbound.metadata["before_turn_flag"] == "bt"
     assert result.outbound.metadata["plugin_flag"] == "m"
     assert result.outbound.media == ["/tmp/a.png"]
+    assert completed[0].input_summary["raw_response"] == "reply"
+    assert completed[0].output_summary["outbound"]["metadata"]["plugin_flag"] == "m"
 
 
 @pytest.mark.asyncio
 async def test_after_turn_collects_extra_and_telemetry_slots():
     committed_extra: list[dict[str, object]] = []
     after_turn_metadata: list[dict[str, object]] = []
+    completed: list[PhaseCompleted] = []
     bus = EventBus()
 
     class ExtraModule:
@@ -1288,6 +1356,7 @@ async def test_after_turn_collects_extra_and_telemetry_slots():
 
     bus.on(AfterTurnCtx, after_turn_handler)
     bus.on(TurnCommitted, committed_handler)
+    bus.on(PhaseCompleted, lambda event: completed.append(event))
     session = _DummySession("telegram:123")
     msg = _inbound()
     state = TurnState(msg=msg, session_key=session.key, dispatch_outbound=False)
@@ -1327,3 +1396,5 @@ async def test_after_turn_collects_extra_and_telemetry_slots():
 
     assert committed_extra[0]["plugin_flag"] == "extra"
     assert after_turn_metadata == [{"plugin_flag": "telemetry"}]
+    assert completed[0].input_summary["reply"] == "reply"
+    assert completed[0].output_summary["outbound"]["content"] == "reply"

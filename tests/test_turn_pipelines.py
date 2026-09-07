@@ -22,7 +22,7 @@ from agent.tools.base import Tool
 from agent.tools.registry import ToolRegistry
 from bus.event_bus import EventBus
 from bus.events import InboundMessage, OutboundMessage
-from bus.events_lifecycle import TurnCommitted
+from bus.events_lifecycle import PhaseCompleted, TurnCommitted
 from core.memory.engine import MemoryEngineRetrieveResult
 from bootstrap.wiring import wire_turn_lifecycle
 
@@ -204,7 +204,9 @@ def test_agent_loop_fanouts_turn_committed_from_passive_turn(tmp_path: Path):
         retrieval_pipeline=_CustomRetrieval(block="MEM_BLOCK"),
     )
     turn_events: list[TurnCommitted] = []
+    phase_events: list[PhaseCompleted] = []
     loop._event_bus.on(TurnCommitted, lambda event: turn_events.append(event))
+    loop._event_bus.on(PhaseCompleted, lambda event: phase_events.append(event))
     session = MagicMock()
     session.key = "cli:1"
     session.messages = []
@@ -241,7 +243,13 @@ def test_agent_loop_fanouts_turn_committed_from_passive_turn(tmp_path: Path):
         )
     )
 
-    msg = InboundMessage(channel="cli", sender="u", chat_id="1", content="hello")
+    msg = InboundMessage(
+        channel="cli",
+        sender="u",
+        chat_id="1",
+        content="hello",
+        timestamp=datetime(2026, 9, 5, 9, 30, 0),
+    )
 
     async def _process_and_drain() -> None:
         await loop._core_runner.process(msg, msg.session_key)
@@ -258,6 +266,40 @@ def test_agent_loop_fanouts_turn_committed_from_passive_turn(tmp_path: Path):
     assert turn_event.tool_chain_raw[0]["calls"][0]["name"] == "noop"
     assert turn_event.react_stats["iteration_count"] == 1
     assert turn_event.react_stats["turn_input_sum_tokens"] == 100
+    expected_turn_id = "passive:cli:1:2026-09-05T09:30:00"
+    assert turn_event.turn_id == expected_turn_id
+    assert loop._reasoner.run_turn.await_args.kwargs["turn_id"] == expected_turn_id
+    assert phase_events
+    assert {event.turn_id for event in phase_events} == {expected_turn_id}
+    phase_by_name = {event.phase: event for event in phase_events}
+    assert phase_by_name["before_turn"].input_summary["message"] == "hello"
+    assert (
+        phase_by_name["before_turn"].output_summary["retrieved_memory_block"]
+        == "MEM_BLOCK"
+    )
+    assert phase_by_name["after_reasoning"].output_summary["reply"] == "ok"
+    assert phase_by_name["after_reasoning"].input_summary["tool_chain"][0]["calls"][0]["name"] == "noop"
+    assert phase_by_name["after_turn"].output_summary["outbound"]["content"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_process_direct_passes_supplied_turn_id_in_message_metadata():
+    loop = object.__new__(AgentLoop)
+    loop._process = AsyncMock(
+        return_value=OutboundMessage(channel="web", chat_id="conversation-1", content="ok")
+    )
+
+    await AgentLoop.process_direct(
+        loop,
+        content="hello",
+        session_key="web:user-1:conversation-1",
+        channel="web",
+        chat_id="conversation-1",
+        turn_id="web-turn-1",
+    )
+
+    msg = loop._process.await_args.args[0]
+    assert msg.metadata["turn_id"] == "web-turn-1"
 
 
 def test_request_interrupt_uses_active_turn_state_snapshot(tmp_path: Path):

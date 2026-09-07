@@ -134,6 +134,7 @@ enabled = false
 project = "akashic-longmemeval"
 dataset = "akashic-longmemeval"
 api_key = "${LANGSMITH_API_KEY}"
+max_field_chars = 8000
 # endpoint = "https://api.smith.langchain.com"
 # workspace_id = "${LANGSMITH_WORKSPACE_ID}"
 
