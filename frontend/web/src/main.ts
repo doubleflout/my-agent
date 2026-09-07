@@ -14,6 +14,10 @@ import {
   Button,
   ConfigProvider,
   Divider,
+  Drawer,
+  Pagination,
+  Select,
+  Tabs,
   Empty,
   Input,
   Layout,
@@ -44,7 +48,8 @@ import "ant-design-vue/dist/reset.css";
 import "./style.css";
 
 type AuthMode = "login" | "register";
-type MainView = "chat" | "sources" | "schedules" | "skills" | "backgroundTasks";
+type MainView = "chat" | "sources" | "schedules" | "skills" | "backgroundTasks" | "memory";
+type MemoryItem = { id: string; summary: string; memory_type: string; status: string; happened_at?: string; created_at?: string; updated_at?: string; source_ref?: string; session_key?: string; extra_json?: unknown; reinforcement?: number; emotional_weight?: number };
 type User = { id: string; email: string; display_name: string | null };
 type Conversation = { id: string; title: string; session_key?: string | null; updated_at: string };
 type MessageSource = {
@@ -127,6 +132,42 @@ const App = defineComponent({
     const skills = ref<SkillItem[]>([]);
     const backgroundTasks = ref<BackgroundTaskItem[]>([]);
     const activeId = ref("");
+    const memoryProfile = ref("");
+    const memoryItems = ref<MemoryItem[]>([]);
+    const memoryDetail = ref<MemoryItem | null>(null);
+    const memoryTab = ref("items");
+    const memoryQuery = ref("");
+    const memoryType = ref("");
+    const memoryStatus = ref("active");
+    const memoryPage = ref(1);
+    const memoryTotal = ref(0);
+    const memoryLoading = ref(false);
+    const memoryLabels: Record<string, string> = { profile: "个人事实", preference: "偏好", procedure: "执行规则", event: "事件" };
+    let memoryRequest = 0;
+    async function loadMemory() {
+      const version = ++memoryRequest;
+      memoryLoading.value = true;
+      memoryDetail.value = null;
+      try {
+        const query = new URLSearchParams({ q: memoryQuery.value, memory_type: memoryType.value, status: memoryStatus.value, page: String(memoryPage.value) });
+        const [profile, list] = await Promise.all([
+          request<{ content: string }>("/api/memory/profile"),
+          request<{ items: MemoryItem[]; total: number }>(`/api/memory/items?${query}`),
+        ]);
+        if (version !== memoryRequest) return;
+        memoryProfile.value = profile.content;
+        memoryItems.value = list.items;
+        memoryTotal.value = list.total;
+      } catch (err) { if (version === memoryRequest) error.value = String(err); }
+      finally { if (version === memoryRequest) memoryLoading.value = false; }
+    }
+    async function openMemory(item: MemoryItem) {
+      const version = memoryRequest;
+      try {
+        const detail = await request<MemoryItem>(`/api/memory/items/${encodeURIComponent(item.id)}`);
+        if (version === memoryRequest && mainView.value === "memory") memoryDetail.value = detail;
+      } catch (err) { error.value = String(err); }
+    }
     const mainView = ref<MainView>("chat");
     const messages = ref<Message[]>([]);
     const draft = ref("");
@@ -645,6 +686,10 @@ const App = defineComponent({
             }),
         h("div", { class: "sidebar-bottom" }, [
           h("button", {
+            class: ["source-entry", mainView.value === "memory" ? "active" : ""],
+            onClick: () => { mainView.value = "memory"; memoryProfile.value = ""; memoryItems.value = []; void loadMemory(); },
+          }, [h("span", { class: "conversation-icon" }, [h(UserOutlined)]), h("span", { class: "conversation-title" }, "记忆")]),
+          h("button", {
             class: ["source-entry", mainView.value === "sources" ? "active" : ""],
             onClick: () => void showSources(),
           }, [
@@ -823,7 +868,39 @@ const App = defineComponent({
       ]);
     }
 
+    function renderMemory() {
+      const refresh = () => { memoryPage.value = 1; void loadMemory(); };
+      const date = (value?: string) => value ? new Date(value).toLocaleString() : "未记录";
+      return h("div", { class: "sources-view memory-view" }, [
+        h(Tabs, { activeKey: memoryTab.value, "onUpdate:activeKey": (value: string) => memoryTab.value = value,
+          items: [{ key: "profile", label: "关于我" }, { key: "items", label: "记忆列表" }] }),
+        memoryTab.value === "profile"
+          ? h("div", { class: "memory-profile" }, memoryProfile.value || "还没有整理好的个人画像")
+          : h("div", [
+            h("div", { class: "memory-filters" }, [
+              h(Input.Search, { value: memoryQuery.value, placeholder: "搜索记忆", "onUpdate:value": (value: string) => memoryQuery.value = value, onSearch: refresh, allowClear: true }),
+              h(Select, { value: memoryType.value, "aria-label": "记忆类型", options: [{ value: "", label: "全部类型" }, ...Object.entries(memoryLabels).map(([value, label]) => ({ value, label }))], onChange: (value: string) => { memoryType.value = value; refresh(); } }),
+              h(Select, { value: memoryStatus.value, "aria-label": "记忆状态", options: [{ value: "active", label: "有效记忆" }, { value: "superseded", label: "已被替代" }, { value: "", label: "全部状态" }], onChange: (value: string) => { memoryStatus.value = value; refresh(); } }),
+            ]),
+            memoryLoading.value ? h(Spin) : memoryItems.value.length ? h("div", memoryItems.value.map(item =>
+              h("button", { class: "memory-row", onClick: () => void openMemory(item) }, [
+                h("span", { class: "memory-kind" }, memoryLabels[item.memory_type] || item.memory_type),
+                h("span", { class: "memory-summary" }, item.summary),
+                h("small", `${date(item.happened_at || item.created_at)} · ${item.status === "active" ? "有效" : "已被替代"}`),
+              ]))) : h(Empty, { description: "暂无符合条件的记忆" }),
+            h(Pagination, { current: memoryPage.value, total: memoryTotal.value, pageSize: 20, showSizeChanger: false, hideOnSinglePage: true, onChange: (page: number) => { memoryPage.value = page; void loadMemory(); } }),
+          ]),
+        h(Drawer, { open: Boolean(memoryDetail.value), title: "记忆详情", width: "min(520px, 100vw)", onClose: () => memoryDetail.value = null }, () => {
+          const item = memoryDetail.value;
+          return item ? [h("p", { class: "memory-profile" }, item.summary), h("dl", { class: "memory-detail" },
+            Object.entries({ "类型": memoryLabels[item.memory_type] || item.memory_type, "状态": item.status === "active" ? "有效" : "已被替代", "发生时间": date(item.happened_at), "创建时间": date(item.created_at), "更新时间": date(item.updated_at), "来源": item.source_ref || "未记录", "来源会话": item.session_key || "未记录", "强化次数": item.reinforcement ?? 0, "情绪权重": item.emotional_weight ?? 0 }).flatMap(([key, value]) => [h("dt", key), h("dd", String(value))])),
+            h("h4", "附加信息"), h("pre", { class: "memory-profile" }, JSON.stringify(item.extra_json || {}, null, 2))] : [];
+        }),
+      ]);
+    }
+
     function renderMessages() {
+      if (mainView.value === "memory") return renderMemory();
       if (mainView.value === "sources") return renderSources();
       if (mainView.value === "schedules") return renderSchedules();
       if (mainView.value === "skills") return renderSkills();
@@ -870,7 +947,7 @@ const App = defineComponent({
           h("header", { class: "chat-header" }, [
             h("div", [
               h(Typography.Title, { level: 3 }, () =>
-                mainView.value === "sources"
+                mainView.value === "memory" ? "记忆" : mainView.value === "sources"
                   ? "消息源"
                   : mainView.value === "schedules"
                     ? "定时任务"
@@ -881,7 +958,7 @@ const App = defineComponent({
                         : activeConversation.value?.title || "选择会话",
               ),
               h(Typography.Text, { type: "secondary" }, () =>
-                mainView.value === "sources"
+                mainView.value === "memory" ? "我的长期记忆" : mainView.value === "sources"
                   ? `已启用 ${enabledSourceCount.value} 个订阅`
                   : mainView.value === "schedules"
                     ? `已启用 ${enabledScheduleCount.value} 个任务`

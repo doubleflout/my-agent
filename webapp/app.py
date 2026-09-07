@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -565,6 +565,67 @@ def create_web_app(
         if user is None or user.disabled or not verify_password(payload.password, user.password_hash):
             raise HTTPException(status_code=401, detail="invalid credentials")
         return TokenResponse(access_token=create_access_token(user_id=user.id, secret=secret))
+
+    @app.get("/api/memory/profile")
+    def memory_profile(user: UserRecord = Depends(get_current_user)):
+        path = workspace_resolver.for_user(user.id) / "memory" / "MEMORY.md"
+        return {"content": path.read_text(encoding="utf-8") if path.exists() else ""}
+
+    def read_memory(user_id: str, *, item_id: str | None = None, q: str = "",
+                    memory_type: str = "", memory_status: str = "active", page: int = 1):
+        # Read through the product connection without creating runtimes or schema.
+        if web_store.engine.dialect.name == "postgresql":
+            where = ["user_id = :user_id"]
+            params: dict[str, Any] = {"user_id": user_id}
+            if item_id is not None:
+                where.append("id = :item_id")
+                params["item_id"] = item_id
+            else:
+                if q:
+                    where.append("summary ILIKE :q")
+                    params["q"] = f"%{q}%"
+                if memory_type:
+                    where.append("memory_type = :memory_type")
+                    params["memory_type"] = memory_type
+                if memory_status:
+                    where.append("status = :status")
+                    params["status"] = memory_status
+            condition = " AND ".join(where)
+            fields = "id, memory_type, summary, status, happened_at, created_at, updated_at, source_ref, session_key, reinforcement, emotional_weight, extra_json"
+            with web_store.engine.connect() as conn:
+                if item_id is not None:
+                    row = conn.execute(text(f"SELECT {fields} FROM memory_items WHERE {condition}"), params).mappings().first()
+                    return dict(row) if row else None
+                total = conn.execute(text(f"SELECT count(*) FROM memory_items WHERE {condition}"), params).scalar_one()
+                rows = conn.execute(text(f"SELECT {fields} FROM memory_items WHERE {condition} ORDER BY created_at DESC, id ASC LIMIT 20 OFFSET :offset"), {**params, "offset": (page - 1) * 20}).mappings().all()
+                return {"items": [dict(row) for row in rows], "total": total, "page": page, "page_size": 20}
+        from memory2.store import MemoryStore2
+        path = workspace_resolver.for_user(user_id) / "memory" / "memory2.db"
+        if not path.exists():
+            return None if item_id is not None else {"items": [], "total": 0, "page": page, "page_size": 20}
+        memory = MemoryStore2(path)
+        try:
+            if item_id is not None:
+                return memory.get_item_for_dashboard(item_id)
+            items, total = memory.list_items_for_dashboard(q=q, memory_type=memory_type, status=memory_status, page=page, page_size=20)
+            return {"items": items, "total": total, "page": page, "page_size": 20}
+        finally:
+            memory.close()
+
+    @app.get("/api/memory/items")
+    def memory_items(q: str = Query(default="", max_length=500),
+                     memory_type: str = Query(default="", pattern="^(|profile|preference|procedure|event)$"),
+                     status: str = Query(default="active", pattern="^(|active|superseded)$"),
+                     page: int = Query(default=1, ge=1),
+                     user: UserRecord = Depends(get_current_user)):
+        return read_memory(user.id, q=q, memory_type=memory_type, memory_status=status, page=page)
+
+    @app.get("/api/memory/items/{item_id}")
+    def memory_detail(item_id: str, user: UserRecord = Depends(get_current_user)):
+        item = read_memory(user.id, item_id=item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Memory not found")
+        return item
 
     @app.get("/api/auth/me", response_model=UserResponse)
     async def me(user: UserRecord = Depends(get_current_user)) -> UserResponse:

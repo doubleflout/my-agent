@@ -12,6 +12,35 @@ from webapp.app import create_web_app
 from webapp.store import WebStore
 
 
+def test_memory_api_isolation(tmp_path):
+    from memory2.store import MemoryStore2
+    from webapp.runtime_manager import UserWorkspaceResolver
+
+    async def scenario():
+        app = make_app(tmp_path)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            assert (await client.get("/api/memory/items")).status_code == 401
+            first = await register(client, "memory-a@example.com")
+            second = await register(client, "memory-b@example.com")
+            headers = {"Authorization": f"Bearer {first}"}
+            other = {"Authorization": f"Bearer {second}"}
+            user = (await client.get("/api/auth/me", headers=headers)).json()
+            root = UserWorkspaceResolver(tmp_path).for_user(user["id"]) / "memory"
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "MEMORY.md").write_text("Private profile", encoding="utf-8")
+            memory = MemoryStore2(root / "memory2.db")
+            item_id = memory.upsert_item("profile", "Private fact", None).split(":", 1)[1]
+            memory.close()
+            assert (await client.get("/api/memory/profile", headers=headers)).json()["content"] == "Private profile"
+            result = (await client.get("/api/memory/items?q=Private&memory_type=profile", headers=headers)).json()
+            assert result["total"] == 1
+            assert (await client.get(f"/api/memory/items/{item_id}", headers=headers)).status_code == 200
+            assert (await client.get(f"/api/memory/items/{item_id}", headers=other)).status_code == 404
+            assert (await client.get("/api/memory/items", headers=other)).json()["total"] == 0
+            assert (await client.get("/api/memory/items?page=0", headers=headers)).status_code == 422
+    asyncio.run(scenario())
+
+
 class FakeExecutor:
     def __init__(self, *, fail: bool = False, delay: float = 0.0) -> None:
         self.fail = fail

@@ -803,3 +803,16 @@ input {
     grid-template-columns: 1fr;
   }
 }
+.memory-view { overflow-y: auto; min-height: 0; }
+.memory-profile { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.8; }
+.memory-filters { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+.memory-filters .ant-input-search { flex: 1 1 220px; }
+.memory-filters .ant-select { width: 140px; }
+.memory-row { display: grid; width: 100%; text-align: left; gap: 8px; padding: 16px 0; border: 0; border-bottom: 1px solid #e5e7eb; background: transparent; cursor: pointer; color: inherit; }
+.memory-row:hover { background: #f0f7f4; }
+.memory-kind { color: #167d65; font-size: 12px; }
+.memory-summary { overflow-wrap: anywhere; white-space: pre-wrap; }
+.memory-row small { color: #687079; }
+.memory-view .ant-pagination { margin-top: 20px; }
+.memory-detail dd { margin: 4px 0 16px; overflow-wrap: anywhere; }
+.memory-detail dt { color: #687079; }
