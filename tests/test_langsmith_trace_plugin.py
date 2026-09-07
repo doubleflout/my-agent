@@ -27,6 +27,7 @@ def _config() -> Config:
                 project="turn-trace-test",
                 api_key="test-key",
                 endpoint="https://api.smith.langchain.com",
+                max_field_chars=32,
             )
         ),
     )
@@ -245,3 +246,36 @@ async def test_langsmith_plugin_closes_unfinished_trace_on_shutdown(
     assert root.patched is True
     assert _FakeClient.instances[0].flushed is True
     assert _FakeClient.instances[0].closed is True
+
+
+@pytest.mark.asyncio
+async def test_langsmith_plugin_truncates_nested_phase_strings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bus, manager = await _load_plugin(tmp_path, monkeypatch)
+    await bus.fanout(_started("turn-1"))
+    await bus.fanout(
+        PhaseCompleted(
+            turn_id="turn-1",
+            phase="before_turn",
+            session_key="web:user-1:conversation-1",
+            channel="web",
+            chat_id="conversation-1",
+            input_summary={"nested": {"message": "x" * 100}},
+            output_summary={"items": [{"content": "y" * 100}]},
+            metadata={"detail": "z" * 100},
+        )
+    )
+
+    child = _FakeRunTree.roots[0].children[0]
+    values = [
+        child.inputs["nested"]["message"],
+        child.outputs["items"][0]["content"],
+        child.extra["metadata"]["detail"],
+    ]
+    assert all(isinstance(value, str) and len(value) <= 32 for value in values)
+    assert all("truncated" in value for value in values)
+
+    await manager.terminate_all()
+    await bus.aclose()

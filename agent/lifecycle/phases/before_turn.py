@@ -138,15 +138,23 @@ class _FanoutBeforeTurnCompletedModule:
                 channel=ctx.channel,
                 chat_id=ctx.chat_id,
                 input_summary={
+                    "message": ctx.content,
                     "message_chars": len(ctx.content or ""),
                     "timestamp": ctx.timestamp.isoformat(),
                 },
                 output_summary={
+                    "skill_names": list(ctx.skill_names),
                     "skill_count": len(ctx.skill_names),
+                    "retrieved_memory_block": ctx.retrieved_memory_block,
                     "memory_block_chars": len(ctx.retrieved_memory_block or ""),
+                    "retrieval_trace": ctx.retrieval_trace_raw,
+                    "history": list(ctx.history_messages),
                     "history_messages": len(ctx.history_messages),
+                    "history_message_count": len(ctx.history_messages),
+                    "extra_hints": list(ctx.extra_hints),
                     "extra_hint_count": len(ctx.extra_hints),
                     "abort": ctx.abort,
+                    "abort_reply": ctx.abort_reply,
                 },
                 metadata=dict(ctx.extra_metadata),
             )

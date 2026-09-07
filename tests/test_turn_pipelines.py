@@ -271,6 +271,15 @@ def test_agent_loop_fanouts_turn_committed_from_passive_turn(tmp_path: Path):
     assert loop._reasoner.run_turn.await_args.kwargs["turn_id"] == expected_turn_id
     assert phase_events
     assert {event.turn_id for event in phase_events} == {expected_turn_id}
+    phase_by_name = {event.phase: event for event in phase_events}
+    assert phase_by_name["before_turn"].input_summary["message"] == "hello"
+    assert (
+        phase_by_name["before_turn"].output_summary["retrieved_memory_block"]
+        == "MEM_BLOCK"
+    )
+    assert phase_by_name["after_reasoning"].output_summary["reply"] == "ok"
+    assert phase_by_name["after_reasoning"].input_summary["tool_chain"][0]["calls"][0]["name"] == "noop"
+    assert phase_by_name["after_turn"].output_summary["outbound"]["content"] == "ok"
 
 
 @pytest.mark.asyncio

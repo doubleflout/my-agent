@@ -113,11 +113,17 @@ class _FanoutAfterStepCompletedModule:
                 input_summary={
                     "iteration": ctx.iteration,
                     "context_tokens_estimate": ctx.context_tokens_estimate,
+                    "tools_called": list(ctx.tools_called),
+                    "partial_reply": ctx.partial_reply,
+                    "partial_thinking": ctx.partial_thinking,
                 },
                 output_summary={
                     "tools_called": list(ctx.tools_called),
                     "tools_used_so_far": list(ctx.tools_used_so_far),
+                    "tool_chain_partial": list(ctx.tool_chain_partial),
+                    "partial_reply": ctx.partial_reply,
                     "partial_reply_chars": len(ctx.partial_reply or ""),
+                    "partial_thinking": ctx.partial_thinking,
                     "has_more": ctx.has_more,
                     "early_stop": ctx.early_stop,
                     "early_stop_reason": ctx.early_stop_reason,

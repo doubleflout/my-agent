@@ -121,6 +121,7 @@ class LangSmithEvalConfig:
     api_key: str = ""
     endpoint: str = ""
     workspace_id: str = ""
+    max_field_chars: int = 8000
 
 
 @dataclass

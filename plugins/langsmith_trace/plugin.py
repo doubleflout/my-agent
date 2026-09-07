@@ -3,6 +3,10 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from collections.abc import Mapping
+from dataclasses import asdict, is_dataclass
+from datetime import date, datetime
+from enum import Enum
 from typing import Any
 
 from agent.plugins import Plugin
@@ -32,6 +36,10 @@ class LangSmithTracePlugin(Plugin):
             run_tree_cls=run_tree_cls,
             client=client,
             project=str(getattr(config, "project", "") or "akashic-agent"),
+            max_field_chars=max(
+                1,
+                int(getattr(config, "max_field_chars", 8000) or 8000),
+            ),
         )
         self.context.event_bus.on(TurnStarted, self._observe_turn_started)
         self.context.event_bus.on(PhaseCompleted, self._observe_phase_completed)
@@ -91,6 +99,7 @@ class _TurnTraceRecorder:
         run_tree_cls: type[Any],
         client: Any,
         project: str,
+        max_field_chars: int,
     ) -> None:
         self._run_tree_cls = run_tree_cls
         self._client = client
@@ -99,6 +108,7 @@ class _TurnTraceRecorder:
         self._after_turn_completed: set[str] = set()
         self._lock = threading.RLock()
         self.project = project
+        self._max_field_chars = max_field_chars
 
     def start(self, event: TurnStarted) -> None:
         turn_id = str(event.turn_id or "").strip()
@@ -109,8 +119,8 @@ class _TurnTraceRecorder:
         root = self._run_tree_cls(
             name="agent_turn",
             run_type="chain",
-            inputs=_turn_started_inputs(event),
-            extra={"metadata": _turn_started_metadata(event)},
+            inputs=self._snapshot(_turn_started_inputs(event)),
+            extra={"metadata": self._snapshot(_turn_started_metadata(event))},
             project_name=self.project,
             ls_client=self._client,
         )
@@ -145,11 +155,11 @@ class _TurnTraceRecorder:
             child = root.create_child(
                 name=f"phase.{event.phase}",
                 run_type="chain",
-                inputs=dict(event.input_summary),
-                extra={"metadata": _phase_metadata(event)},
+                inputs=self._snapshot(event.input_summary),
+                extra={"metadata": self._snapshot(_phase_metadata(event))},
             )
             child.post()
-            child.end(outputs=dict(event.output_summary))
+            child.end(outputs=self._snapshot(event.output_summary))
             child.patch()
             if event.phase == "after_turn":
                 self._after_turn_completed.add(turn_id)
@@ -183,11 +193,14 @@ class _TurnTraceRecorder:
         self._after_turn_completed.discard(turn_id)
         error = event.extra.get("error")
         root.end(
-            outputs=_turn_outputs(event),
+            outputs=self._snapshot(_turn_outputs(event)),
             error=str(error) if error else None,
-            metadata=_turn_metadata(event),
+            metadata=self._snapshot(_turn_metadata(event)),
         )
         root.patch()
+
+    def _snapshot(self, value: object) -> Any:
+        return _trace_value(value, max_chars=self._max_field_chars)
 
     def close(self) -> None:
         with self._lock:
@@ -318,3 +331,38 @@ def _turn_outputs(event: TurnCommitted) -> dict[str, object]:
         "react_stats": event.react_stats,
         "error": event.extra.get("error"),
     }
+
+
+def _trace_value(value: object, *, max_chars: int, depth: int = 0) -> Any:
+    if depth >= 16:
+        return "<maximum trace depth reached>"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _truncate_trace_string(value, max_chars)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return _trace_value(value.value, max_chars=max_chars, depth=depth + 1)
+    if is_dataclass(value) and not isinstance(value, type):
+        return _trace_value(asdict(value), max_chars=max_chars, depth=depth + 1)
+    if isinstance(value, Mapping):
+        return {
+            str(key): _trace_value(item, max_chars=max_chars, depth=depth + 1)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [
+            _trace_value(item, max_chars=max_chars, depth=depth + 1)
+            for item in value
+        ]
+    return _truncate_trace_string(repr(value), max_chars)
+
+
+def _truncate_trace_string(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    suffix = f"... [truncated {len(value) - max_chars} chars]"
+    if len(suffix) >= max_chars:
+        return value[:max_chars]
+    return value[: max_chars - len(suffix)] + suffix

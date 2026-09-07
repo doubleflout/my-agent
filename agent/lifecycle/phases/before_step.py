@@ -130,7 +130,18 @@ class _FanoutBeforeStepCompletedModule:
                 chat_id=ctx.chat_id,
                 input_summary={
                     "iteration": ctx.iteration,
+                    "messages": list(frame.input.messages),
+                    "visible_tool_names": (
+                        sorted(ctx.visible_tool_names)
+                        if ctx.visible_tool_names is not None
+                        else None
+                    ),
                     "visible_tools": (
+                        len(ctx.visible_tool_names)
+                        if ctx.visible_tool_names is not None
+                        else None
+                    ),
+                    "visible_tool_count": (
                         len(ctx.visible_tool_names)
                         if ctx.visible_tool_names is not None
                         else None
@@ -138,8 +149,10 @@ class _FanoutBeforeStepCompletedModule:
                 },
                 output_summary={
                     "input_tokens_estimate": ctx.input_tokens_estimate,
+                    "extra_hints": list(ctx.extra_hints),
                     "extra_hint_count": len(ctx.extra_hints),
                     "early_stop": ctx.early_stop,
+                    "early_stop_reply": ctx.early_stop_reply,
                 },
                 metadata={"iteration": ctx.iteration},
             )

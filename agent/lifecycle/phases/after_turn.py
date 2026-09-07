@@ -269,6 +269,7 @@ class _FanoutAfterTurnCompletedModule:
 
     async def run(self, frame: AfterTurnFrame) -> AfterTurnFrame:
         ctx = cast(AfterTurnCtx, frame.slots[_CTX_SLOT])
+        outbound = frame.input.outbound
         await self._bus.fanout(
             PhaseCompleted(
                 turn_id=frame.input.state.turn_id,
@@ -277,10 +278,31 @@ class _FanoutAfterTurnCompletedModule:
                 channel=ctx.channel,
                 chat_id=ctx.chat_id,
                 input_summary={
+                    "reply": ctx.reply,
+                    "thinking": ctx.thinking,
+                    "tools_used": list(ctx.tools_used),
+                    "dispatch_requested": ctx.will_dispatch,
                     "will_dispatch": ctx.will_dispatch,
                     "tool_count": len(ctx.tools_used),
                 },
                 output_summary={
+                    "outbound": {
+                        "channel": outbound.channel,
+                        "chat_id": outbound.chat_id,
+                        "content": outbound.content,
+                        "thinking": outbound.thinking,
+                        "media": list(outbound.media),
+                        "metadata": dict(outbound.metadata),
+                    },
+                    "post_reply_budget": dict(
+                        cast(dict[str, int], frame.slots[_BUDGET_SLOT])
+                    ),
+                    "react_stats": dict(
+                        cast(dict[str, int], frame.slots[_REACT_STATS_SLOT])
+                    ),
+                    "tool_chain": list(
+                        cast(list[dict[str, Any]], frame.slots[_TOOL_CHAIN_SLOT])
+                    ),
                     "reply_chars": len(ctx.reply or ""),
                     "thinking_chars": len(ctx.thinking or ""),
                     "dispatched": ctx.will_dispatch,
