@@ -816,3 +816,5 @@ input {
 .memory-view .ant-pagination { margin-top: 20px; }
 .memory-detail dd { margin: 4px 0 16px; overflow-wrap: anywhere; }
 .memory-detail dt { color: #687079; }
+.skill-detail-link { border: 0; background: transparent; color: inherit; text-align: left; padding: 0; cursor: pointer; overflow-wrap: anywhere; }
+.skill-detail-link:hover { text-decoration: underline; }

@@ -672,6 +672,22 @@ def create_web_app(
     ) -> list[SkillResponse]:
         return load_skills(user.id)
 
+    @app.get("/api/skills/{skill_id}")
+    def skill_detail(skill_id: str, user: UserRecord = Depends(get_current_user)):
+        target = next((item for item in load_skills(user.id) if item.id == skill_id), None)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Skill not found")
+        root = workspace_resolver.for_user(user.id).resolve()
+        path = (root / target.relative_path / target.entry_file).resolve()
+        if not path.is_relative_to(root) or path.name.lower() != "skill.md":
+            raise HTTPException(status_code=403, detail="Invalid skill path")
+        try:
+            content = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="SKILL.md is missing from your workspace")
+        return {"id": target.id, "name": target.title or target.name,
+                "path": path.relative_to(root).as_posix(), "content": content}
+
     @app.patch("/api/skills/{skill_id}", response_model=SkillResponse)
     async def patch_skill(
         skill_id: str,

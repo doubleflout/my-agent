@@ -130,12 +130,32 @@ const App = defineComponent({
     const sources = ref<MessageSource[]>([]);
     const scheduledJobs = ref<ScheduleItem[]>([]);
     const skills = ref<SkillItem[]>([]);
+    const skillDetail = ref<{ name: string; path: string; content: string } | null>(null);
+    const skillDetailOpen = ref(false);
+    const skillDetailLoading = ref(false);
+    const skillDetailError = ref("");
+    let skillDetailRequest = 0;
+    async function showSkillDetail(skill: SkillItem) {
+      const version = ++skillDetailRequest;
+      skillDetailOpen.value = true;
+      skillDetail.value = null;
+      skillDetailError.value = "";
+      skillDetailLoading.value = true;
+      try {
+        const detail = await request<{ name: string; path: string; content: string }>(`/api/skills/${encodeURIComponent(skill.id)}`);
+        if (version === skillDetailRequest) skillDetail.value = detail;
+      } catch (err) {
+        if (version === skillDetailRequest) skillDetailError.value = String(err);
+      } finally {
+        if (version === skillDetailRequest) skillDetailLoading.value = false;
+      }
+    }
     const backgroundTasks = ref<BackgroundTaskItem[]>([]);
     const activeId = ref("");
     const memoryProfile = ref("");
     const memoryItems = ref<MemoryItem[]>([]);
     const memoryDetail = ref<MemoryItem | null>(null);
-    const memoryTab = ref("items");
+    const memoryTab = ref("profile");
     const memoryQuery = ref("");
     const memoryType = ref("");
     const memoryStatus = ref("active");
@@ -800,6 +820,11 @@ const App = defineComponent({
 
     function renderSkills() {
       return h("div", { class: "sources-view" }, [
+        h(Drawer, { open: skillDetailOpen.value, title: skillDetail.value?.name || "技能详情", width: "min(720px, 100vw)", onClose: () => { skillDetailOpen.value = false; ++skillDetailRequest; } }, () => [
+          skillDetailLoading.value ? h(Spin) : skillDetailError.value
+            ? h(Alert, { type: "error", message: "无法读取技能文件", description: skillDetailError.value })
+            : skillDetail.value ? h("div", [h("p", skillDetail.value.path), h("pre", { class: "memory-profile" }, skillDetail.value.content || "文件内容为空")]) : null,
+        ]),
         skillsLoading.value
           ? h("div", { class: "empty-chat" }, [h(Spin), h("span", "加载技能")])
           : skills.value.length === 0
@@ -812,7 +837,7 @@ const App = defineComponent({
                     ]),
                     h("span", { class: "source-pill" }, skillKindText(skill)),
                   ]),
-                  h("strong", { class: "skill-card-title" }, skill.title || skill.name),
+                  h("button", { class: "skill-card-title skill-detail-link", onClick: () => void showSkillDetail(skill), title: "查看 SKILL.md" }, skill.title || skill.name),
                   skill.description
                     ? h("p", { class: "skill-card-description" }, skill.description)
                     : null,
@@ -872,8 +897,10 @@ const App = defineComponent({
       const refresh = () => { memoryPage.value = 1; void loadMemory(); };
       const date = (value?: string) => value ? new Date(value).toLocaleString() : "未记录";
       return h("div", { class: "sources-view memory-view" }, [
-        h(Tabs, { activeKey: memoryTab.value, "onUpdate:activeKey": (value: string) => memoryTab.value = value,
-          items: [{ key: "profile", label: "关于我" }, { key: "items", label: "记忆列表" }] }),
+        h(Tabs, { activeKey: memoryTab.value, "onUpdate:activeKey": (value: string) => memoryTab.value = value }, () => [
+          h(Tabs.TabPane, { key: "profile", tab: "关于我" }),
+          h(Tabs.TabPane, { key: "items", tab: "记忆列表" }),
+        ]),
         memoryTab.value === "profile"
           ? h("div", { class: "memory-profile" }, memoryProfile.value || "还没有整理好的个人画像")
           : h("div", [

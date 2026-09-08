@@ -12,6 +12,30 @@ from webapp.app import create_web_app
 from webapp.store import WebStore
 
 
+def test_skill_detail_reads_user_workspace(tmp_path):
+    from webapp.runtime_manager import UserWorkspaceResolver
+
+    async def scenario():
+        app = make_app(tmp_path)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            token = await register(client, "skill-owner@example.com")
+            other = await register(client, "skill-other@example.com")
+            headers = {"Authorization": f"Bearer {token}"}
+            user = (await client.get("/api/auth/me", headers=headers)).json()
+            root = UserWorkspaceResolver(tmp_path).for_user(user["id"])
+            path = root / "skills" / "private-detail" / "SKILL.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            content = "---\nname: private-detail\ndescription: Private skill\n---\nPrivate instructions"
+            path.write_text(content, encoding="utf-8")
+            records = (await client.get("/api/skills", headers=headers)).json()
+            skill = next(item for item in records if item["name"] == "private-detail")
+            url = f"/api/skills/{skill['id']}"
+            assert (await client.get(url, headers=headers)).json()["content"] == content
+            assert (await client.get(url)).status_code == 401
+            assert (await client.get(url, headers={"Authorization": f"Bearer {other}"})).status_code == 404
+    asyncio.run(scenario())
+
+
 def test_memory_api_isolation(tmp_path):
     from memory2.store import MemoryStore2
     from webapp.runtime_manager import UserWorkspaceResolver
